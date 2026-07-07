@@ -1,0 +1,19 @@
+[Unit]
+Description=addressify HTTP API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/addressify
+Environment=HOST=0.0.0.0
+Environment=PORT=8080
+Environment=COUNTRY_CODES=CZ,SK
+Environment=INDEX_DIR=/opt/addressify/data/indexes
+Environment=DATABASE_URL=postgres://address:password@127.0.0.1:5432/address_wise
+ExecStartPre=/opt/addressify/target/release/addressify build-indexes
+ExecStart=/opt/addressify/target/release/addressify serve
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
