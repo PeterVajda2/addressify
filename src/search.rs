@@ -11,6 +11,7 @@ use tokio::task::spawn_blocking;
 
 use crate::AppResult;
 use crate::models::{Address, SearchResult, StructuredAddress};
+use crate::normalize::normalize_text;
 
 #[derive(Clone, Copy)]
 pub struct IndexFields {
@@ -60,7 +61,7 @@ impl AddressIndexes {
 
 impl AddressIndex {
     pub fn search(&self, user_input: &str, limit: usize) -> tantivy::Result<Vec<SearchResult>> {
-        let normalized_query = normalize_query(user_input);
+        let normalized_query = normalize_text(user_input);
         if normalized_query.is_empty() {
             return Ok(Vec::new());
         }
@@ -203,43 +204,12 @@ fn document_optional_string(document: &TantivyDocument, field: Field) -> Option<
     document_string(document, field)
 }
 
-fn normalize_query(query: &str) -> String {
-    query
-        .chars()
-        .map(fold_char)
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn fold_char(ch: char) -> char {
-    match ch.to_lowercase().next().unwrap_or(ch) {
-        'á' | 'ä' | 'à' | 'â' | 'å' => 'a',
-        'č' | 'ć' => 'c',
-        'ď' => 'd',
-        'é' | 'ě' | 'è' | 'ê' => 'e',
-        'í' | 'ì' | 'î' => 'i',
-        'ľ' | 'ĺ' => 'l',
-        'ň' => 'n',
-        'ó' | 'ô' | 'ò' | 'ö' => 'o',
-        'ŕ' | 'ř' => 'r',
-        'š' => 's',
-        'ť' => 't',
-        'ú' | 'ů' | 'ù' | 'ü' => 'u',
-        'ý' => 'y',
-        'ž' => 'z',
-        ch if ch.is_ascii_alphanumeric() => ch,
-        _ => ' ',
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::normalize_query;
+    use crate::normalize::normalize_text;
 
     #[test]
     fn normalize_query_folds_accents_and_symbols() {
-        assert_eq!(normalize_query("Banská-Bystrica 15"), "banska bystrica 15");
+        assert_eq!(normalize_text("Banská-Bystrica 15"), "banska bystrica 15");
     }
 }

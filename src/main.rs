@@ -1,6 +1,7 @@
 mod http;
 mod indexing;
 pub mod models;
+mod normalize;
 mod search;
 
 use std::env;
