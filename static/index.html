@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>addresswise</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f4f4;
+      --panel: #ffffff;
+      --ink: #111111;
+      --line: #d2d2d2;
+      --line-strong: #8a8a8a;
+      --muted: #5f5f5f;
+      --shadow: rgba(0, 0, 0, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Times New Roman", Georgia, serif;
+      color: var(--ink);
+      background: linear-gradient(180deg, #fafafa 0%, var(--bg) 100%);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 2rem;
+    }
+    main {
+      width: min(100%, 58rem);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 0;
+      padding: 2rem;
+      box-shadow: 0 1rem 2.5rem var(--shadow);
+    }
+    h1 {
+      margin: 0 0 0.5rem;
+      font-size: clamp(2rem, 4vw, 3rem);
+      line-height: 1;
+      letter-spacing: -0.03em;
+    }
+    .intro {
+      margin: 0 0 1.5rem;
+      color: var(--muted);
+      font-size: 1rem;
+      line-height: 1.5;
+    }
+    .layout {
+      display: grid;
+      gap: 1.5rem;
+    }
+    @media (min-width: 860px) {
+      .layout {
+        grid-template-columns: minmax(0, 1fr) 20rem;
+        align-items: start;
+      }
+    }
+    form {
+      display: grid;
+      gap: 1rem;
+    }
+    .field {
+      display: grid;
+      gap: 0.35rem;
+    }
+    label {
+      font-size: 0.9rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    input {
+      width: 100%;
+      padding: 0.9rem 1rem;
+      border-radius: 0;
+      border: 1px solid var(--line-strong);
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+      font-size: 1rem;
+    }
+    input:focus {
+      outline: none;
+      border-color: var(--ink);
+      box-shadow: 0 0 0 0.15rem rgba(0, 0, 0, 0.08);
+    }
+    input[readonly] {
+      background: #f8f8f8;
+    }
+    .grid {
+      display: grid;
+      gap: 1rem;
+    }
+    @media (min-width: 640px) {
+      .grid {
+        grid-template-columns: minmax(0, 1fr) 12rem;
+      }
+    }
+    .panel {
+      border: 1px solid var(--line);
+      background: #fcfcfc;
+      min-height: 24rem;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+    }
+    .panel-head {
+      padding: 1rem 1rem 0.5rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .panel-head h2 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    .panel-head p {
+      margin: 0.35rem 0 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.4;
+    }
+    .status {
+      min-height: 2.75rem;
+      margin: 0;
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+    .suggestions {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      overflow: auto;
+    }
+    .suggestions li + li {
+      border-top: 1px solid var(--line);
+    }
+    .suggestion {
+      width: 100%;
+      padding: 1rem;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+      font: inherit;
+    }
+    .suggestion:hover,
+    .suggestion:focus {
+      background: #f1f1f1;
+      outline: none;
+    }
+    .suggestion strong {
+      display: block;
+      font-size: 0.98rem;
+      font-weight: 600;
+      line-height: 1.4;
+    }
+    .suggestion span {
+      display: block;
+      margin-top: 0.2rem;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.35;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>addresswise</h1>
+    <p class="intro">Select a suggestion to populate the structured address fields.</p>
+    <div class="layout">
+      <form id="search-form">
+        <div class="field">
+          <label for="street-input">Street</label>
+          <input id="street-input" name="q" type="text" placeholder="Type a street or address" autocomplete="street-address" spellcheck="false">
+        </div>
+        <div class="grid">
+          <div class="field">
+            <label for="city-input">City</label>
+            <input id="city-input" name="city" type="text" readonly>
+          </div>
+          <div class="field">
+            <label for="postal-code-input">Postal code</label>
+            <input id="postal-code-input" name="postal_code" type="text" readonly>
+          </div>
+        </div>
+      </form>
+      <section class="panel" aria-label="Suggestions">
+        <div class="panel-head">
+          <h2>Suggestions</h2>
+          <p>Results stay in a fixed panel so the form does not shift while you type.</p>
+        </div>
+        <p class="status" id="status"></p>
+        <ul class="suggestions" id="results"></ul>
+      </section>
+    </div>
+  </main>
+  <script>
+    const form = document.getElementById("search-form");
+    const streetInput = document.getElementById("street-input");
+    const cityInput = document.getElementById("city-input");
+    const postalCodeInput = document.getElementById("postal-code-input");
+    const status = document.getElementById("status");
+    const results = document.getElementById("results");
+
+    function escapeHtml(value) {
+      return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    let activeController = null;
+    let pendingTimer = null;
+    let requestSequence = 0;
+    let latestResults = [];
+
+    async function runSearch(query) {
+      if (activeController) {
+        activeController.abort();
+      }
+
+      activeController = new AbortController();
+      const params = new URLSearchParams({ q: query, limit: "10" });
+      const response = await fetch(`/search?${params.toString()}`, {
+        method: "GET",
+        cache: "no-store",
+        credentials: "same-origin",
+        signal: activeController.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Search failed with HTTP ${response.status}`);
+      }
+
+      return response.json();
+    }
+
+    function buildStreetLine(address) {
+      return [address.thoroughfare, address.premise, address.subpremise]
+        .filter(Boolean)
+        .join(" ");
+    }
+
+    function fillStructuredFields(result) {
+      const address = result.address;
+      streetInput.value = buildStreetLine(address) || address.full_address;
+      cityInput.value = address.locality || address.dependent_locality || "";
+      postalCodeInput.value = address.postal_code || "";
+    }
+
+    function clearStructuredFields() {
+      cityInput.value = "";
+      postalCodeInput.value = "";
+    }
+
+    function renderResults(payload) {
+      latestResults = payload.results;
+      status.textContent = `${payload.count} result(s)`;
+      results.innerHTML = payload.results
+        .map((result, index) => {
+          const street = buildStreetLine(result.address) || result.address.full_address;
+          const locality = [
+            result.address.locality || result.address.dependent_locality || "",
+            result.address.postal_code || "",
+          ]
+            .filter(Boolean)
+            .join(", ");
+
+          return `<li><button class="suggestion" type="button" data-index="${index}"><strong>${escapeHtml(street)}</strong><span>${escapeHtml(locality || result.address.full_address)}</span></button></li>`;
+        })
+        .join("");
+
+      if (!payload.results.length) {
+        status.textContent = "No results.";
+      }
+    }
+
+    async function triggerSearch(query) {
+      results.innerHTML = "";
+
+      if (!query) {
+        if (activeController) {
+          activeController.abort();
+          activeController = null;
+        }
+        latestResults = [];
+        clearStructuredFields();
+        status.textContent = "Start typing to see suggestions.";
+        return;
+      }
+
+      const currentRequest = ++requestSequence;
+      status.textContent = "Searching...";
+
+      try {
+        const payload = await runSearch(query);
+        if (currentRequest === requestSequence) {
+          renderResults(payload);
+        }
+      } catch (error) {
+        if (error.name === "AbortError") {
+          return;
+        }
+        if (currentRequest === requestSequence) {
+          latestResults = [];
+          status.textContent = error.message;
+        }
+      }
+    }
+
+    function scheduleSearch() {
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+      }
+
+      pendingTimer = setTimeout(() => {
+        pendingTimer = null;
+        void triggerSearch(streetInput.value.trim());
+      }, 120);
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        pendingTimer = null;
+      }
+      await triggerSearch(streetInput.value.trim());
+    });
+
+    streetInput.addEventListener("input", () => {
+      clearStructuredFields();
+      scheduleSearch();
+    });
+
+    results.addEventListener("click", (event) => {
+      const button = event.target.closest(".suggestion");
+      if (!button) {
+        return;
+      }
+
+      const index = Number(button.dataset.index);
+      const result = latestResults[index];
+      if (!result) {
+        return;
+      }
+
+      fillStructuredFields(result);
+      status.textContent = `Selected: ${result.address.full_address}`;
+    });
+
+    status.textContent = "Start typing to see suggestions.";
+  </script>
+</body>
+</html>
