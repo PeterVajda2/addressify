@@ -56,6 +56,9 @@
       display: grid;
       gap: 0.35rem;
     }
+    .field-street {
+      position: relative;
+    }
     label {
       font-size: 0.9rem;
       letter-spacing: 0.04em;
@@ -90,12 +93,20 @@
       }
     }
     .panel {
+      position: absolute;
+      top: calc(100% + 0.35rem);
+      left: 0;
+      right: 0;
+      z-index: 10;
       border: 1px solid #e3e3e3;
       background: #ffffff;
       height: 14rem;
-      display: grid;
+      display: none;
       grid-template-rows: minmax(0, 1fr);
       box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.04);
+    }
+    .panel.visible {
+      display: grid;
     }
     .status {
       margin: 0;
@@ -148,12 +159,12 @@
   <main>
     <h1>addresswise</h1>
     <form id="search-form">
-      <div class="field">
-        <label for="street-input">Street</label>
-        <input id="street-input" name="q" type="text" placeholder="Type a street or address" autocomplete="street-address" spellcheck="false">
-        <section class="panel" aria-label="Suggestions">
-          <ul class="suggestions" id="results"></ul>
-        </section>
+        <div class="field field-street">
+          <label for="street-input">Street</label>
+          <input id="street-input" name="q" type="text" placeholder="Type a street or address" autocomplete="street-address" spellcheck="false">
+          <section class="panel" aria-label="Suggestions">
+            <ul class="suggestions" id="results"></ul>
+          </section>
       </div>
       <div class="grid">
         <div class="field">
@@ -172,6 +183,7 @@
     const streetInput = document.getElementById("street-input");
     const cityInput = document.getElementById("city-input");
     const postalCodeInput = document.getElementById("postal-code-input");
+    const panel = document.querySelector(".panel");
     const results = document.getElementById("results");
 
     function escapeHtml(value) {
@@ -230,10 +242,18 @@
     function clearSuggestions() {
       latestResults = [];
       results.innerHTML = "";
+      panel.classList.remove("visible");
     }
 
     function renderResults(payload) {
       latestResults = payload.results;
+      if (!payload.results.length) {
+        panel.classList.remove("visible");
+        results.innerHTML = "";
+        return;
+      }
+
+      panel.classList.add("visible");
       results.innerHTML = payload.results
         .map((result, index) => {
           const street = buildStreetLine(result.address) || result.address.full_address;
@@ -300,6 +320,16 @@
     streetInput.addEventListener("input", () => {
       clearStructuredFields();
       scheduleSearch();
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!(event.target instanceof Element)) {
+        return;
+      }
+
+      if (!event.target.closest(".field-street")) {
+        clearSuggestions();
+      }
     });
 
     results.addEventListener("click", (event) => {
