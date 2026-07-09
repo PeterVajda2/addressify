@@ -111,7 +111,7 @@ fn build_index_to_dir(country_code: &str, index_dir: &Path) -> AppResult<()> {
 fn open_index_from_dir(country_code: &str, index_dir: &Path) -> AppResult<AddressIndex> {
     if !index_dir.exists() {
         return Err(format!(
-            "missing index for {country_code} at {}. Run `addressify build-indexes` first.",
+            "missing index for {country_code} at {}. Run `addresswise build-indexes` first.",
             index_dir.display()
         )
         .into());

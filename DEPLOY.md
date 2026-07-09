@@ -1,12 +1,12 @@
-# Deploying addressify
+# Deploying addresswise
 
 ## Runtime model
 
 The binary now supports three modes:
 
-- `addressify build-indexes`
-- `addressify serve`
-- `addressify dev`
+- `addresswise build-indexes`
+- `addresswise serve`
+- `addresswise dev`
 
 Recommended production flow:
 
@@ -20,7 +20,7 @@ Recommended production flow:
 - `COUNTRY_CODES`
   Example: `CZ,SK`
 - `INDEX_DIR`
-  Example: `/opt/addressify/data/indexes`
+  Example: `/opt/addresswise/data/indexes`
 - `DATABASE_URL`
   Example: `postgres://address:password@127.0.0.1:5432/address_wise`
 
@@ -47,9 +47,9 @@ Build indexes:
 HOST=0.0.0.0 \
 PORT=8080 \
 COUNTRY_CODES=CZ,SK \
-INDEX_DIR=/opt/addressify/data/indexes \
+INDEX_DIR=/opt/addresswise/data/indexes \
 DATABASE_URL=postgres://address:password@127.0.0.1:5432/address_wise \
-./target/release/addressify build-indexes
+./target/release/addresswise build-indexes
 ```
 
 Serve from existing indexes:
@@ -58,8 +58,8 @@ Serve from existing indexes:
 HOST=0.0.0.0 \
 PORT=8080 \
 COUNTRY_CODES=CZ,SK \
-INDEX_DIR=/opt/addressify/data/indexes \
-./target/release/addressify serve
+INDEX_DIR=/opt/addresswise/data/indexes \
+./target/release/addresswise serve
 ```
 
 Local all-in-one development mode:
@@ -67,7 +67,7 @@ Local all-in-one development mode:
 ```bash
 COUNTRY_CODES=CZ,SK \
 DATABASE_URL=postgres://address:password@127.0.0.1:5432/address_wise \
-./target/release/addressify dev
+./target/release/addresswise dev
 ```
 
 ## HTTP/3
@@ -85,7 +85,7 @@ If you put it behind a reverse proxy, make sure the proxy supports HTTP/3 passth
 
 An example unit is included at:
 
-- `deploy/addressify.service.example`
+- `deploy/addresswise.service.example`
 
 The example rebuilds indexes before each start. For large datasets, a better long-term pattern is:
 

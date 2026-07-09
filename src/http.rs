@@ -20,7 +20,7 @@ use crate::search::{AddressIndexes, search_indexes_async};
 
 const MAX_WORKERS: usize = 8;
 const BLOCKING_THREADS_PER_WORKER: usize = 8;
-pub const H3_CERT_PATH: &str = "/tmp/addressify-h3-cert.der";
+pub const H3_CERT_PATH: &str = "/tmp/addresswise-h3-cert.der";
 
 #[derive(Debug, Deserialize)]
 struct SearchParams {
@@ -76,17 +76,17 @@ async fn home() -> Html<&'static str> {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>addressify</title>
+  <title>addresswise</title>
   <style>
     :root {
       color-scheme: light;
-      --bg: #f5f1e8;
+      --bg: #f3efe7;
       --panel: #fffdf8;
-      --ink: #1f2430;
-      --muted: #5d6678;
-      --line: #d8cfbf;
-      --accent: #0d6b57;
-      --accent-2: #b8582f;
+      --ink: #18202b;
+      --line: #d8d0c0;
+      --accent: #145f4c;
+      --accent-soft: #dceee8;
+      --muted: #647083;
     }
     * { box-sizing: border-box; }
     body {
@@ -94,87 +94,146 @@ async fn home() -> Html<&'static str> {
       font-family: Georgia, "Times New Roman", serif;
       color: var(--ink);
       background:
-        radial-gradient(circle at top left, rgba(184, 88, 47, 0.16), transparent 28rem),
-        radial-gradient(circle at bottom right, rgba(13, 107, 87, 0.18), transparent 24rem),
+        radial-gradient(circle at top left, rgba(20, 95, 76, 0.18), transparent 26rem),
+        radial-gradient(circle at bottom right, rgba(196, 145, 70, 0.12), transparent 24rem),
         var(--bg);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 1.5rem;
     }
     main {
-      max-width: 56rem;
-      margin: 0 auto;
-      min-height: 100vh;
-      padding: 4rem 1.5rem;
-      display: grid;
-      align-content: center;
-      gap: 1.5rem;
-    }
-    .panel {
+      width: min(100%, 44rem);
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 1.25rem;
+      border-radius: 1.5rem;
       padding: 2rem;
-      box-shadow: 0 1.5rem 4rem rgba(31, 36, 48, 0.08);
+      box-shadow: 0 1.5rem 4rem rgba(24, 32, 43, 0.08);
     }
     h1 {
-      margin: 0 0 0.75rem;
-      font-size: clamp(2.5rem, 6vw, 4.75rem);
-      line-height: 0.96;
+      margin: 0 0 1rem;
+      font-size: clamp(2.2rem, 5vw, 3.6rem);
+      line-height: 1;
       letter-spacing: -0.04em;
     }
-    p {
-      margin: 0;
+    form {
+      display: grid;
+      gap: 1rem;
+    }
+    input {
+      width: 100%;
+      padding: 1rem 1.1rem;
+      border-radius: 1rem;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
       font-size: 1.05rem;
-      line-height: 1.7;
-      color: var(--muted);
-      max-width: 44rem;
     }
-    .actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.75rem;
-      margin-top: 1.5rem;
+    input:focus {
+      outline: 2px solid transparent;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 0.2rem rgba(20, 95, 76, 0.16);
     }
-    a {
-      color: inherit;
-      text-decoration: none;
-    }
-    .button {
-      display: inline-block;
-      padding: 0.9rem 1.15rem;
+    button {
+      width: fit-content;
+      padding: 0.9rem 1.2rem;
       border-radius: 999px;
-      border: 1px solid var(--ink);
-      background: var(--ink);
+      border: 0;
+      background: var(--accent);
       color: white;
+      font: inherit;
       font-weight: 600;
+      cursor: pointer;
     }
-    .button.alt {
-      background: transparent;
-      color: var(--accent-2);
-      border-color: var(--accent-2);
+    ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 0.75rem;
     }
-    code {
-      font-family: "SFMono-Regular", Consolas, monospace;
-      font-size: 0.95em;
+    li {
+      padding: 0.95rem 1rem;
+      border-radius: 1rem;
+      background: var(--accent-soft);
+      border: 1px solid rgba(20, 95, 76, 0.08);
+      line-height: 1.45;
+    }
+    .muted {
+      color: var(--muted);
+      margin: 0;
+      min-height: 1.5rem;
     }
   </style>
 </head>
 <body>
   <main>
-    <section class="panel">
-      <h1>addressify</h1>
-      <p>
-        Fast address lookup for Czechia and Slovakia. This service exposes a search API backed by
-        Tantivy indexes built from PostgreSQL.
-      </p>
-      <div class="actions">
-        <a class="button" href="/health">Health check</a>
-        <a class="button alt" href="/search?q=hlavna%2068&country=SK">Example search</a>
-      </div>
-    </section>
-    <p>
-      Endpoints: <code>/search?q=Na%20pasekach%203085%2F20&amp;country=CZ</code>,
-      <code>/suggest?q=hlavna&amp;country=SK</code>, <code>/health</code>.
-    </p>
+    <h1>addresswise</h1>
+    <form id="search-form">
+      <input id="street-input" name="q" type="text" placeholder="Type a street or address" autocomplete="street-address" spellcheck="false">
+      <button type="submit">Search</button>
+    </form>
+    <p class="muted" id="status"></p>
+    <ul id="results"></ul>
   </main>
+  <script>
+    const form = document.getElementById("search-form");
+    const input = document.getElementById("street-input");
+    const status = document.getElementById("status");
+    const results = document.getElementById("results");
+
+    function escapeHtml(value) {
+      return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    async function runSearch(query) {
+      const params = new URLSearchParams({ q: query, limit: "10" });
+      const response = await fetch(`/search?${params.toString()}`, {
+        method: "GET",
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+
+      if (!response.ok) {
+        throw new Error(`Search failed with HTTP ${response.status}`);
+      }
+
+      return response.json();
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const query = input.value.trim();
+      results.innerHTML = "";
+
+      if (!query) {
+        status.textContent = "Enter a street or address.";
+        return;
+      }
+
+      status.textContent = "Searching...";
+
+      try {
+        const payload = await runSearch(query);
+        status.textContent = `${payload.count} result(s)`;
+        results.innerHTML = payload.results
+          .map((result) => `<li>${escapeHtml(result.address.full_address)}</li>`)
+          .join("");
+
+        if (!payload.results.length) {
+          status.textContent = "No results.";
+        }
+      } catch (error) {
+        status.textContent = error.message;
+      }
+    });
+  </script>
 </body>
 </html>"#,
     )
@@ -337,9 +396,9 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = collect_string_body(resp.into_body()).await.expect("body");
-        assert!(body.contains("<title>addressify</title>"));
-        assert!(body.contains("Fast address lookup for Czechia and Slovakia."));
-        assert!(body.contains("/search?q=hlavna%2068&country=SK"));
+        assert!(body.contains("<title>addresswise</title>"));
+        assert!(body.contains("id=\"search-form\""));
+        assert!(body.contains("fetch(`/search?${params.toString()}`"));
     }
 
     fn test_indexes() -> tantivy::Result<AddressIndexes> {

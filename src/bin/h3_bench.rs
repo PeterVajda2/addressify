@@ -16,7 +16,7 @@ const REPS: usize = 20;
 const COUNTRY: &str = "CZ";
 const LIMIT: usize = 10;
 const SERVER_NAME: &str = "localhost";
-const H3_CERT_PATH: &str = "/tmp/addressify-h3-cert.der";
+const H3_CERT_PATH: &str = "/tmp/addresswise-h3-cert.der";
 const QUERIES: [&str; 15] = [
     "N",
     "Na",

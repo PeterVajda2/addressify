@@ -4,10 +4,10 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
-use addressify::address_rules::{
+use addresswise::address_rules::{
     clean_thoroughfare, format_display_address, normalize_address_parts,
 };
-use addressify::normalize::normalize_text;
+use addresswise::normalize::normalize_text;
 use anyhow::{Context, Result, bail};
 use calamine::{Data, Range, Reader, Sheets, open_workbook_auto};
 use sqlx::{PgPool, QueryBuilder};

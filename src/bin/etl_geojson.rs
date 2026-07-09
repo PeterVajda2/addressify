@@ -4,10 +4,10 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use addressify::address_rules::{
+use addresswise::address_rules::{
     clean_thoroughfare, format_display_address, normalize_address_parts,
 };
-use addressify::normalize::normalize_text;
+use addresswise::normalize::normalize_text;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use sqlx::{PgPool, QueryBuilder};

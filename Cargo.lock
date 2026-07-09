@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "addressify"
+name = "addresswise"
 version = "0.1.0"
 dependencies = [
  "anyhow",

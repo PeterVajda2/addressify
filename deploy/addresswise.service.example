@@ -1,17 +1,17 @@
 [Unit]
-Description=addressify HTTP API
+Description=addresswise HTTP API
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/addressify
+WorkingDirectory=/opt/addresswise
 Environment=HOST=0.0.0.0
 Environment=PORT=8080
 Environment=COUNTRY_CODES=CZ,SK
-Environment=INDEX_DIR=/opt/addressify/data/indexes
+Environment=INDEX_DIR=/opt/addresswise/data/indexes
 Environment=DATABASE_URL=postgres://address:password@127.0.0.1:5432/address_wise
-ExecStartPre=/opt/addressify/target/release/addressify build-indexes
-ExecStart=/opt/addressify/target/release/addressify serve
+ExecStartPre=/opt/addresswise/target/release/addresswise build-indexes
+ExecStart=/opt/addresswise/target/release/addresswise serve
 Restart=always
 RestartSec=5
 
