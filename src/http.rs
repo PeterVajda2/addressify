@@ -192,12 +192,22 @@ async fn home() -> Html<&'static str> {
         .replaceAll("'", "&#39;");
     }
 
+    let activeController = null;
+    let pendingTimer = null;
+    let requestSequence = 0;
+
     async function runSearch(query) {
+      if (activeController) {
+        activeController.abort();
+      }
+
+      activeController = new AbortController();
       const params = new URLSearchParams({ q: query, limit: "10" });
       const response = await fetch(`/search?${params.toString()}`, {
         method: "GET",
         cache: "no-store",
         credentials: "same-origin",
+        signal: activeController.signal,
       });
 
       if (!response.ok) {
@@ -207,32 +217,72 @@ async fn home() -> Html<&'static str> {
       return response.json();
     }
 
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const query = input.value.trim();
+    function renderResults(payload) {
+      status.textContent = `${payload.count} result(s)`;
+      results.innerHTML = payload.results
+        .map((result) => `<li>${escapeHtml(result.address.full_address)}</li>`)
+        .join("");
+
+      if (!payload.results.length) {
+        status.textContent = "No results.";
+      }
+    }
+
+    async function triggerSearch(query) {
       results.innerHTML = "";
 
       if (!query) {
-        status.textContent = "Enter a street or address.";
+        if (activeController) {
+          activeController.abort();
+          activeController = null;
+        }
+        status.textContent = "Start typing to see suggestions.";
         return;
       }
 
+      const currentRequest = ++requestSequence;
       status.textContent = "Searching...";
 
       try {
         const payload = await runSearch(query);
-        status.textContent = `${payload.count} result(s)`;
-        results.innerHTML = payload.results
-          .map((result) => `<li>${escapeHtml(result.address.full_address)}</li>`)
-          .join("");
-
-        if (!payload.results.length) {
-          status.textContent = "No results.";
+        if (currentRequest === requestSequence) {
+          renderResults(payload);
         }
       } catch (error) {
-        status.textContent = error.message;
+        if (error.name === "AbortError") {
+          return;
+        }
+        if (currentRequest === requestSequence) {
+          status.textContent = error.message;
+        }
       }
+    }
+
+    function scheduleSearch() {
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+      }
+
+      pendingTimer = setTimeout(() => {
+        pendingTimer = null;
+        void triggerSearch(input.value.trim());
+      }, 120);
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        pendingTimer = null;
+      }
+      await triggerSearch(input.value.trim());
     });
+
+    input.addEventListener("input", () => {
+      scheduleSearch();
+    });
+
+    status.textContent = "Start typing to see suggestions.";
   </script>
 </body>
 </html>"#,
@@ -398,7 +448,8 @@ mod tests {
         let body = collect_string_body(resp.into_body()).await.expect("body");
         assert!(body.contains("<title>addresswise</title>"));
         assert!(body.contains("id=\"search-form\""));
-        assert!(body.contains("fetch(`/search?${params.toString()}`"));
+        assert!(body.contains("input.addEventListener(\"input\""));
+        assert!(body.contains("Start typing to see suggestions."));
     }
 
     fn test_indexes() -> tantivy::Result<AddressIndexes> {
