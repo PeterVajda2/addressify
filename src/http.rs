@@ -9,7 +9,7 @@ use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
 use xitca_web::{
     App,
-    handler::{handler_service, json::Json, query::Query, state::StateRef},
+    handler::{handler_service, html::Html, json::Json, query::Query, state::StateRef},
     http::StatusCode,
     route::get,
 };
@@ -53,6 +53,7 @@ pub fn serve(addr: String, indexes: Arc<AddressIndexes>) -> AppResult<()> {
 
     App::new()
         .with_state(indexes)
+        .at("/", get(handler_service(home)))
         .at("/health", get(handler_service(health)))
         .at("/search", get(handler_service(search)))
         .at("/suggest", get(handler_service(search)))
@@ -66,6 +67,117 @@ pub fn serve(addr: String, indexes: Arc<AddressIndexes>) -> AppResult<()> {
         .wait()?;
 
     Ok(())
+}
+
+async fn home() -> Html<&'static str> {
+    Html(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>addressify</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f1e8;
+      --panel: #fffdf8;
+      --ink: #1f2430;
+      --muted: #5d6678;
+      --line: #d8cfbf;
+      --accent: #0d6b57;
+      --accent-2: #b8582f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(184, 88, 47, 0.16), transparent 28rem),
+        radial-gradient(circle at bottom right, rgba(13, 107, 87, 0.18), transparent 24rem),
+        var(--bg);
+    }
+    main {
+      max-width: 56rem;
+      margin: 0 auto;
+      min-height: 100vh;
+      padding: 4rem 1.5rem;
+      display: grid;
+      align-content: center;
+      gap: 1.5rem;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 1.25rem;
+      padding: 2rem;
+      box-shadow: 0 1.5rem 4rem rgba(31, 36, 48, 0.08);
+    }
+    h1 {
+      margin: 0 0 0.75rem;
+      font-size: clamp(2.5rem, 6vw, 4.75rem);
+      line-height: 0.96;
+      letter-spacing: -0.04em;
+    }
+    p {
+      margin: 0;
+      font-size: 1.05rem;
+      line-height: 1.7;
+      color: var(--muted);
+      max-width: 44rem;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-top: 1.5rem;
+    }
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+    .button {
+      display: inline-block;
+      padding: 0.9rem 1.15rem;
+      border-radius: 999px;
+      border: 1px solid var(--ink);
+      background: var(--ink);
+      color: white;
+      font-weight: 600;
+    }
+    .button.alt {
+      background: transparent;
+      color: var(--accent-2);
+      border-color: var(--accent-2);
+    }
+    code {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.95em;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <h1>addressify</h1>
+      <p>
+        Fast address lookup for Czechia and Slovakia. This service exposes a search API backed by
+        Tantivy indexes built from PostgreSQL.
+      </p>
+      <div class="actions">
+        <a class="button" href="/health">Health check</a>
+        <a class="button alt" href="/search?q=hlavna%2068&country=SK">Example search</a>
+      </div>
+    </section>
+    <p>
+      Endpoints: <code>/search?q=Na%20pasekach%203085%2F20&amp;country=CZ</code>,
+      <code>/suggest?q=hlavna&amp;country=SK</code>, <code>/health</code>.
+    </p>
+  </main>
+</body>
+</html>"#,
+    )
 }
 
 async fn health(StateRef(indexes): StateRef<'_, Arc<AddressIndexes>>) -> Json<HealthResponse> {
@@ -145,7 +257,7 @@ fn persist_cert(cert_der: &[u8]) -> AppResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{health, normalize_country, search};
+    use super::{health, home, normalize_country, search};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -175,6 +287,7 @@ mod tests {
         let indexes = Arc::new(test_indexes().expect("test index"));
         let service = App::new()
             .with_state(indexes)
+            .at("/", get(handler_service(home)))
             .at("/health", get(handler_service(health)))
             .at("/search", get(handler_service(search)))
             .at("/suggest", get(handler_service(search)))
@@ -204,6 +317,29 @@ mod tests {
             payload["results"][0]["address"]["full_address"],
             "Hlavna 68, Kosice, 040 01, SK"
         );
+    }
+
+    #[tokio::test]
+    async fn home_endpoint_returns_html() {
+        let indexes = Arc::new(test_indexes().expect("test index"));
+        let service = App::new()
+            .with_state(indexes)
+            .at("/", get(handler_service(home)))
+            .finish()
+            .call(())
+            .await
+            .expect("app service");
+
+        let mut req = WebRequest::default();
+        *req.uri_mut() = Uri::from_static("/");
+
+        let resp = service.call(req).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = collect_string_body(resp.into_body()).await.expect("body");
+        assert!(body.contains("<title>addressify</title>"));
+        assert!(body.contains("Fast address lookup for Czechia and Slovakia."));
+        assert!(body.contains("/search?q=hlavna%2068&country=SK"));
     }
 
     fn test_indexes() -> tantivy::Result<AddressIndexes> {
