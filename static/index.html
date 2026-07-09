@@ -221,8 +221,16 @@
       return response.json();
     }
 
+    function buildHouseNumber(address) {
+      if (address.premise && address.subpremise) {
+        return `${address.premise}/${address.subpremise}`;
+      }
+
+      return address.premise || address.subpremise || "";
+    }
+
     function buildStreetLine(address) {
-      return [address.thoroughfare, address.premise, address.subpremise]
+      return [address.thoroughfare, buildHouseNumber(address)]
         .filter(Boolean)
         .join(" ");
     }
