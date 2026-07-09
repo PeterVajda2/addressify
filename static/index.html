@@ -90,19 +90,18 @@
       }
     }
     .panel {
-      border: 1px solid var(--line);
-      background: #fcfcfc;
-      height: 18rem;
+      border: 1px solid #e3e3e3;
+      background: #ffffff;
+      height: 14rem;
       display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
+      box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.04);
     }
     .status {
-      min-height: 2.5rem;
       margin: 0;
-      padding: 0.75rem 1rem;
-      border-bottom: 1px solid var(--line);
+      padding: 0.75rem 1rem 0;
       color: var(--muted);
-      font-size: 0.95rem;
+      font-size: 0.9rem;
     }
     .suggestions {
       list-style: none;
@@ -112,11 +111,11 @@
       min-height: 0;
     }
     .suggestions li + li {
-      border-top: 1px solid var(--line);
+      border-top: 1px solid #efefef;
     }
     .suggestion {
       width: 100%;
-      padding: 1rem;
+      padding: 0.8rem 0.9rem;
       border: 0;
       border-radius: 0;
       background: transparent;
@@ -127,7 +126,7 @@
     }
     .suggestion:hover,
     .suggestion:focus {
-      background: #f1f1f1;
+      background: #f7f7f7;
       outline: none;
     }
     .suggestion strong {
@@ -153,7 +152,6 @@
         <label for="street-input">Street</label>
         <input id="street-input" name="q" type="text" placeholder="Type a street or address" autocomplete="street-address" spellcheck="false">
         <section class="panel" aria-label="Suggestions">
-          <p class="status" id="status"></p>
           <ul class="suggestions" id="results"></ul>
         </section>
       </div>
@@ -174,7 +172,6 @@
     const streetInput = document.getElementById("street-input");
     const cityInput = document.getElementById("city-input");
     const postalCodeInput = document.getElementById("postal-code-input");
-    const status = document.getElementById("status");
     const results = document.getElementById("results");
 
     function escapeHtml(value) {
@@ -230,9 +227,13 @@
       postalCodeInput.value = "";
     }
 
+    function clearSuggestions() {
+      latestResults = [];
+      results.innerHTML = "";
+    }
+
     function renderResults(payload) {
       latestResults = payload.results;
-      status.textContent = `${payload.count} result(s)`;
       results.innerHTML = payload.results
         .map((result, index) => {
           const street = buildStreetLine(result.address) || result.address.full_address;
@@ -246,10 +247,6 @@
           return `<li><button class="suggestion" type="button" data-index="${index}"><strong>${escapeHtml(street)}</strong><span>${escapeHtml(locality || result.address.full_address)}</span></button></li>`;
         })
         .join("");
-
-      if (!payload.results.length) {
-        status.textContent = "No results.";
-      }
     }
 
     async function triggerSearch(query) {
@@ -258,10 +255,8 @@
           activeController.abort();
           activeController = null;
         }
-        latestResults = [];
+        clearSuggestions();
         clearStructuredFields();
-        results.innerHTML = "";
-        status.textContent = "Start typing to see suggestions.";
         return;
       }
 
@@ -278,8 +273,7 @@
           return;
         }
         if (currentRequest === requestSequence) {
-          latestResults = [];
-          status.textContent = error.message;
+          clearSuggestions();
         }
       }
     }
@@ -310,7 +304,7 @@
     });
 
     results.addEventListener("click", (event) => {
-      const button = event.target.closest(".suggestion");
+      const button = event.target instanceof Element ? event.target.closest(".suggestion") : null;
       if (!button) {
         return;
       }
@@ -322,10 +316,8 @@
       }
 
       fillStructuredFields(result);
-      status.textContent = `${latestResults.length} result(s)`;
+      clearSuggestions();
     });
-
-    status.textContent = "Start typing to see suggestions.";
   </script>
 </body>
 </html>
