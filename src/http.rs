@@ -235,7 +235,7 @@ mod tests {
         assert!(body.contains("label for=\"street-input\">Street</label>"));
         assert!(body.contains("label for=\"city-input\">City</label>"));
         assert!(body.contains("label for=\"postal-code-input\">Postal code</label>"));
-        assert!(body.contains("Results stay in a fixed panel"));
+        assert!(body.contains("section class=\"panel\""));
         assert!(body.contains("fillStructuredFields(result)"));
     }
 

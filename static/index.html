@@ -48,16 +48,6 @@
       font-size: 1rem;
       line-height: 1.5;
     }
-    .layout {
-      display: grid;
-      gap: 1.5rem;
-    }
-    @media (min-width: 860px) {
-      .layout {
-        grid-template-columns: minmax(0, 1fr) 20rem;
-        align-items: start;
-      }
-    }
     form {
       display: grid;
       gap: 1rem;
@@ -102,29 +92,14 @@
     .panel {
       border: 1px solid var(--line);
       background: #fcfcfc;
-      height: 24rem;
+      height: 18rem;
       display: grid;
-      grid-template-rows: auto auto minmax(0, 1fr);
-    }
-    .panel-head {
-      padding: 1rem 1rem 0.5rem;
-      border-bottom: 1px solid var(--line);
-    }
-    .panel-head h2 {
-      margin: 0;
-      font-size: 1rem;
-      font-weight: 600;
-    }
-    .panel-head p {
-      margin: 0.35rem 0 0;
-      color: var(--muted);
-      font-size: 0.95rem;
-      line-height: 1.4;
+      grid-template-rows: auto minmax(0, 1fr);
     }
     .status {
-      min-height: 2.75rem;
+      min-height: 2.5rem;
       margin: 0;
-      padding: 0.85rem 1rem;
+      padding: 0.75rem 1rem;
       border-bottom: 1px solid var(--line);
       color: var(--muted);
       font-size: 0.95rem;
@@ -173,33 +148,26 @@
 <body>
   <main>
     <h1>addresswise</h1>
-    <p class="intro">Select a suggestion to populate the structured address fields.</p>
-    <div class="layout">
-      <form id="search-form">
+    <form id="search-form">
+      <div class="field">
+        <label for="street-input">Street</label>
+        <input id="street-input" name="q" type="text" placeholder="Type a street or address" autocomplete="street-address" spellcheck="false">
+        <section class="panel" aria-label="Suggestions">
+          <p class="status" id="status"></p>
+          <ul class="suggestions" id="results"></ul>
+        </section>
+      </div>
+      <div class="grid">
         <div class="field">
-          <label for="street-input">Street</label>
-          <input id="street-input" name="q" type="text" placeholder="Type a street or address" autocomplete="street-address" spellcheck="false">
+          <label for="city-input">City</label>
+          <input id="city-input" name="city" type="text" readonly>
         </div>
-        <div class="grid">
-          <div class="field">
-            <label for="city-input">City</label>
-            <input id="city-input" name="city" type="text" readonly>
-          </div>
-          <div class="field">
-            <label for="postal-code-input">Postal code</label>
-            <input id="postal-code-input" name="postal_code" type="text" readonly>
-          </div>
+        <div class="field">
+          <label for="postal-code-input">Postal code</label>
+          <input id="postal-code-input" name="postal_code" type="text" readonly>
         </div>
-      </form>
-      <section class="panel" aria-label="Suggestions">
-        <div class="panel-head">
-          <h2>Suggestions</h2>
-          <p>Results stay in a fixed panel so the form does not shift while you type.</p>
-        </div>
-        <p class="status" id="status"></p>
-        <ul class="suggestions" id="results"></ul>
-      </section>
-    </div>
+      </div>
+    </form>
   </main>
   <script>
     const form = document.getElementById("search-form");
@@ -354,7 +322,7 @@
       }
 
       fillStructuredFields(result);
-      status.textContent = `Selected: ${result.address.full_address}`;
+      status.textContent = `${latestResults.length} result(s)`;
     });
 
     status.textContent = "Start typing to see suggestions.";
