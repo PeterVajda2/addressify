@@ -128,7 +128,12 @@ pub async fn search_indexes_async(
             .cloned()
             .ok_or_else(|| format!("unknown country {country}"))?;
         return if street_only {
-            search_streets_async(index, query, limit).await
+            let streets = search_streets_async(Arc::clone(&index), query.clone(), limit).await?;
+            if streets.is_empty() {
+                search_async(index, query, limit).await
+            } else {
+                Ok(streets)
+            }
         } else {
             search_async(index, query, limit).await
         };
@@ -143,7 +148,18 @@ pub async fn search_indexes_async(
         };
         results.extend(country_results);
     }
-    if street_only {
+    if street_only && results.is_empty() {
+        for index in indexes.by_country.values() {
+            results.extend(search_async(Arc::clone(index), query.clone(), limit).await?);
+        }
+        results.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| left.formatted.cmp(&right.formatted))
+                .then_with(|| left.country_code.cmp(&right.country_code))
+        });
+    } else if street_only {
         sort_streets_alphabetically(&mut results);
     } else {
         results.sort_by(|left, right| {

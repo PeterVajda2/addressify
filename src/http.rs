@@ -344,6 +344,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn street_only_search_falls_back_to_addresses_when_no_street_matches() {
+        let state = Arc::new(AppState {
+            indexes: Arc::new(test_indexes().expect("test index")),
+            auth: AuthState::Disabled,
+            demo_api_key: String::from("test-key"),
+        });
+        let service = App::new()
+            .with_state(state)
+            .at("/search", get(handler_service(search)))
+            .finish()
+            .call(())
+            .await
+            .expect("app service");
+
+        let mut req = WebRequest::default();
+        *req.uri_mut() = Uri::from_static("/search?q=hlavna%2068&country=SK&street_only");
+        *req.body_mut().socket_addr_mut() = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1234);
+
+        let body = collect_string_body(service.call(req).await.expect("response").into_body())
+            .await
+            .expect("body");
+        let payload: JsonValue = serde_json::from_str(&body).expect("json body");
+
+        assert_eq!(payload["count"], 1);
+        assert_eq!(payload["results"][0]["address"]["premise"], "68");
+    }
+
+    #[tokio::test]
     async fn home_endpoint_returns_html() {
         let indexes = Arc::new(AppState {
             indexes: Arc::new(test_indexes().expect("test index")),
