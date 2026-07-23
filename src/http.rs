@@ -446,7 +446,8 @@ mod tests {
             _storage: IndexStorage::Temp {
                 _temp_dir: index_dir,
             },
-            reader,
+            reader: reader.clone(),
+            street_reader: reader,
             fields,
         };
 

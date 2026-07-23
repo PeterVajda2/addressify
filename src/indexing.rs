@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -51,6 +51,7 @@ fn build_index_from_postgres(country_code: &str) -> AppResult<(AddressIndex, usi
                 _temp_dir: index_dir,
             },
             reader: build_reader(&index)?,
+            street_reader: build_reader(&index)?,
             fields,
         },
         indexed_count,
@@ -67,7 +68,9 @@ pub fn build_indices_to_dir(
     for country_code in country_codes {
         let country_started = Instant::now();
         let country_dir = country_index_dir(index_root, country_code);
+        let street_dir = country_street_index_dir(index_root, country_code);
         build_index_to_dir(country_code, &country_dir)?;
+        build_street_index_to_dir(country_code, &street_dir)?;
         let indexed_count = open_index_from_dir(country_code, &country_dir)?.doc_count() as usize;
 
         println!(
@@ -122,6 +125,10 @@ fn open_index_from_dir(country_code: &str, index_dir: &Path) -> AppResult<Addres
     }
 
     let index = Index::open_in_dir(index_dir)?;
+    let street_index = Index::open_in_dir(country_street_index_dir(
+        index_dir.parent().unwrap(),
+        country_code,
+    ))?;
     let fields = index_fields(index.schema())?;
 
     Ok(AddressIndex {
@@ -129,8 +136,23 @@ fn open_index_from_dir(country_code: &str, index_dir: &Path) -> AppResult<Addres
             _path: index_dir.to_path_buf(),
         },
         reader: build_reader(&index)?,
+        street_reader: build_reader(&street_index)?,
         fields,
     })
+}
+
+fn build_street_index_to_dir(country_code: &str, index_dir: &Path) -> AppResult<()> {
+    if index_dir.exists() {
+        fs::remove_dir_all(index_dir)?;
+    }
+    fs::create_dir_all(index_dir)?;
+    let (schema, fields) = address_schema();
+    let index = Index::create_in_dir(index_dir, schema)?;
+    let mut writer = index.writer(100_000_000)?;
+    let count = stream_postgres_streets(country_code, &mut writer, fields)?;
+    writer.commit()?;
+    println!("Indexed {count} distinct {country_code} streets.");
+    Ok(())
 }
 
 pub fn address_schema() -> (Schema, IndexFields) {
@@ -237,6 +259,35 @@ fn stream_postgres_addresses(
     Ok(indexed_count)
 }
 
+fn stream_postgres_streets(
+    country_code: &str,
+    writer: &mut IndexWriter,
+    fields: IndexFields,
+) -> AppResult<usize> {
+    let sql = address_copy_sql(country_code);
+    let mut child = postgres_command(&sql)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let stdout = child.stdout.take().ok_or("failed to capture psql stdout")?;
+    let mut seen = HashSet::new();
+    for line in BufReader::new(stdout).lines() {
+        let address = address_from_json_line(&line?)?;
+        let Some(street) = address.thoroughfare.as_deref() else {
+            continue;
+        };
+        if street.trim().is_empty() || !seen.insert(normalize_text(street)) {
+            continue;
+        }
+        writer.add_document(tantivy_document(&address, fields))?;
+    }
+    let status = child.wait()?;
+    if !status.success() {
+        return Err(format!("psql exited with status {status}").into());
+    }
+    Ok(seen.len())
+}
+
 fn postgres_command(sql: &str) -> Command {
     let psql_bin = env::var("PSQL_BIN").unwrap_or_else(|_| String::from("psql"));
     let mut command = Command::new(psql_bin);
@@ -251,6 +302,10 @@ fn postgres_command(sql: &str) -> Command {
 
 fn country_index_dir(index_root: &Path, country_code: &str) -> PathBuf {
     index_root.join(country_code.to_lowercase())
+}
+
+fn country_street_index_dir(index_root: &Path, country_code: &str) -> PathBuf {
+    index_root.join(format!("{}_streets", country_code.to_lowercase()))
 }
 
 fn address_copy_sql(country_code: &str) -> String {

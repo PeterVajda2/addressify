@@ -33,6 +33,7 @@ pub struct IndexFields {
 pub struct AddressIndex {
     pub _storage: IndexStorage,
     pub reader: IndexReader,
+    pub street_reader: IndexReader,
     pub fields: IndexFields,
 }
 
@@ -89,18 +90,8 @@ impl AddressIndex {
             self.fields.street_search_text
         };
         let query = autocomplete_query(street_field, &normalized_query);
-        // Fetch every matching address before deduplicating: a populous street can
-        // otherwise consume the entire address result limit with house numbers.
-        // For one character, only inspect a bounded batch of prefix matches. This
-        // preserves the prefix filter while avoiding a scan of every matching
-        // address just to find a few distinct street names.
-        let searcher = self.reader.searcher();
-        let candidate_limit = if is_single_character(&normalized_query) {
-            limit.saturating_mul(500)
-        } else {
-            usize::try_from(searcher.num_docs()).unwrap_or(usize::MAX)
-        };
-        search_tantivy_streets(&searcher, &query, self.fields, candidate_limit, limit)
+        let searcher = self.street_reader.searcher();
+        search_tantivy_streets(&searcher, &query, self.fields, limit, limit)
     }
 
     pub fn doc_count(&self) -> u64 {
@@ -377,7 +368,8 @@ mod tests {
             _storage: IndexStorage::Persistent {
                 _path: PathBuf::new(),
             },
-            reader,
+            reader: reader.clone(),
+            street_reader: reader,
             fields,
         };
 
@@ -414,7 +406,8 @@ mod tests {
             _storage: IndexStorage::Persistent {
                 _path: PathBuf::new(),
             },
-            reader,
+            reader: reader.clone(),
+            street_reader: reader,
             fields,
         };
 
@@ -450,7 +443,8 @@ mod tests {
             _storage: IndexStorage::Persistent {
                 _path: PathBuf::new(),
             },
-            reader,
+            reader: reader.clone(),
+            street_reader: reader,
             fields,
         };
 
