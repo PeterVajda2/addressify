@@ -19,6 +19,15 @@ CREATE TABLE IF NOT EXISTS api_key_domains (
     CONSTRAINT api_key_domains_domain_lowercase CHECK (domain = LOWER(domain))
 );
 
+ALTER TABLE api_keys
+    ADD COLUMN IF NOT EXISTS total_requests BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS last_used_domain TEXT,
+    ADD COLUMN IF NOT EXISTS last_used_ip TEXT;
+
+ALTER TABLE api_key_domains
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_api_key_domains_key_domain
     ON api_key_domains (api_key_id, domain);
 
@@ -34,6 +43,10 @@ CREATE TABLE IF NOT EXISTS api_key_usage_daily (
     PRIMARY KEY (api_key_id, usage_date, request_domain),
     CONSTRAINT api_key_usage_daily_domain_lowercase CHECK (request_domain = LOWER(request_domain))
 );
+
+ALTER TABLE api_key_usage_daily
+    ADD COLUMN IF NOT EXISTS request_count BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS last_request_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 CREATE INDEX IF NOT EXISTS idx_api_key_usage_daily_usage_date
     ON api_key_usage_daily (usage_date DESC, api_key_id);
