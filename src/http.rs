@@ -26,6 +26,7 @@ pub const H3_CERT_PATH: &str = "/tmp/addresswise-h3-cert.der";
 pub struct AppState {
     pub indexes: Arc<AddressIndexes>,
     pub auth: AuthState,
+    pub demo_api_key: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,8 +78,10 @@ pub fn serve_with_state(addr: String, state: Arc<AppState>) -> AppResult<()> {
     Ok(())
 }
 
-async fn home() -> Html<&'static str> {
-    Html(include_str!("../static/index.html"))
+async fn home(StateRef(state): StateRef<'_, Arc<AppState>>) -> Html<String> {
+    let demo_api_key = serde_json::to_string(&state.demo_api_key)
+        .expect("serializing a demo API key must succeed");
+    Html(include_str!("../static/index.html").replace("__DEMO_API_KEY__", &demo_api_key))
 }
 
 async fn health(StateRef(state): StateRef<'_, Arc<AppState>>) -> Json<HealthResponse> {
@@ -264,6 +267,7 @@ mod tests {
         let indexes = Arc::new(AppState {
             indexes: Arc::new(test_indexes().expect("test index")),
             auth: AuthState::Disabled,
+            demo_api_key: String::from("test-key"),
         });
         let service = App::new()
             .with_state(indexes)
@@ -310,6 +314,7 @@ mod tests {
         let indexes = Arc::new(AppState {
             indexes: Arc::new(test_indexes().expect("test index")),
             auth: AuthState::Disabled,
+            demo_api_key: String::from("test-key"),
         });
         let service = App::new()
             .with_state(indexes)
@@ -342,6 +347,7 @@ mod tests {
         let indexes = Arc::new(AppState {
             indexes: Arc::new(test_indexes().expect("test index")),
             auth: AuthState::Disabled,
+            demo_api_key: String::from("test-key"),
         });
         let service = App::new()
             .with_state(indexes)
@@ -364,7 +370,8 @@ mod tests {
         assert!(body.contains("label for=\"city-input\">City</label>"));
         assert!(body.contains("label for=\"postal-code-input\">Postal code</label>"));
         assert!(body.contains("section class=\"panel\""));
-        assert!(body.contains("api_key"));
+        assert!(body.contains("const demoApiKey = \"test-key\""));
+        assert!(!body.contains("api-key-input"));
         assert!(body.contains("&street_only"));
         assert!(body.contains("selectedStreet"));
         assert!(body.contains("fillStructuredFields(result)"));

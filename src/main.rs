@@ -53,9 +53,18 @@ fn country_codes_from_env() -> Vec<String> {
 }
 
 enum Command {
-    BuildIndexes { index_dir: PathBuf },
-    Serve { host: String, port: u16, index_dir: PathBuf },
-    Dev { host: String, port: u16 },
+    BuildIndexes {
+        index_dir: PathBuf,
+    },
+    Serve {
+        host: String,
+        port: u16,
+        index_dir: PathBuf,
+    },
+    Dev {
+        host: String,
+        port: u16,
+    },
     Migrate,
 }
 
@@ -115,6 +124,7 @@ async fn serve_command(
     let started = Instant::now();
     let address_indexes = load_indices_from_dir(country_codes, &index_dir)?;
     let auth = AuthState::from_env_required().await?;
+    let demo_api_key = demo_api_key_from_env()?;
 
     println!(
         "Loaded {} country index(es) from {} in {:.2?}.",
@@ -130,6 +140,7 @@ async fn serve_command(
         Arc::new(http::AppState {
             indexes: Arc::new(address_indexes),
             auth,
+            demo_api_key,
         }),
     )
 }
@@ -138,6 +149,7 @@ async fn dev_command(country_codes: &[String], host: String, port: u16) -> AppRe
     let started = Instant::now();
     let (address_indexes, indexed_counts) = build_indices_from_postgres(country_codes)?;
     let auth = AuthState::from_env_required().await?;
+    let demo_api_key = demo_api_key_from_env()?;
 
     for (country_code, indexed_count) in indexed_counts {
         println!("Indexed {indexed_count} active {country_code} addresses.");
@@ -154,8 +166,13 @@ async fn dev_command(country_codes: &[String], host: String, port: u16) -> AppRe
         Arc::new(http::AppState {
             indexes: Arc::new(address_indexes),
             auth,
+            demo_api_key,
         }),
     )
+}
+
+fn demo_api_key_from_env() -> AppResult<String> {
+    env::var("DEMO_API_KEY").map_err(|_| "DEMO_API_KEY is required to serve the demo".into())
 }
 
 async fn migrate_command() -> AppResult<()> {
@@ -182,7 +199,11 @@ async fn migrate_command() -> AppResult<()> {
         println!("applied migration {}", path.display());
     }
 
-    println!("Migrations applied from {} in {:.2?}.", auth::db_dir().display(), started.elapsed());
+    println!(
+        "Migrations applied from {} in {:.2?}.",
+        auth::db_dir().display(),
+        started.elapsed()
+    );
     Ok(())
 }
 
