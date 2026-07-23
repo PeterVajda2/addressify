@@ -388,7 +388,7 @@
 
       if (latestResultsAreStreetOnly) {
         selectedStreet = result.address.thoroughfare || result.formatted;
-        streetInput.value = selectedStreet;
+        streetInput.value = `${selectedStreet} `;
         clearStructuredFields();
       } else {
         selectedStreet = result.address.thoroughfare || "";
