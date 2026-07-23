@@ -31,10 +31,17 @@ Production host: `peter@31.220.81.20`.
 - Runtime secrets, including `DATABASE_URL`, are in `/etc/addresswise.env` and
   must never be printed or committed.
 
-Deploy by pulling `master` in the source checkout, building the release binary,
-and installing/copying it into the running bundle. Rebuild the Tantivy indexes
-with the runtime environment when indexing schema or search behavior changes;
-stop `addresswise` before replacing those indexes. Then restart the service.
+Use `scripts/deploy_production.sh` to build locally, upload a staged binary,
+and cut over the runtime bundle. Pass `--rebuild-indexes` for indexing schema
+or search-behavior changes. That mode builds into a sibling index directory
+while the service stays online, then swaps directories during the short service
+restart. The source checkout is still kept on `master` for troubleshooting.
 Confirm `systemctl is-active addresswise` is `active` and
 `curl --fail http://127.0.0.1:8080/health` succeeds before reporting
 completion.
+
+## Keeping this file current
+
+Whenever work reveals a new or corrected project, deployment, service, or
+operational fact, update this `AGENTS.md` in the same workstream and commit it.
+Do not leave deployment knowledge only in conversation history.
