@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, FuzzyTermQuery, Occur, Query, TermQuery};
 use tantivy::schema::{Field, IndexRecordOption, TantivyDocument, Value};
-use tantivy::{DocAddress, IndexReader, Searcher, Term};
+use tantivy::{IndexReader, Searcher, Term};
 use tempfile::TempDir;
 use tokio::task::spawn_blocking;
 
@@ -67,12 +67,8 @@ impl AddressIndex {
             return Ok(Vec::new());
         }
 
-        let searcher = self.reader.searcher();
-        if is_single_character(&normalized_query) {
-            return first_indexed_addresses(&searcher, self.fields, limit);
-        }
-
         let query = autocomplete_query(self.fields.search_text, &normalized_query);
+        let searcher = self.reader.searcher();
         search_tantivy(&searcher, &query, self.fields, limit)
     }
 
@@ -86,15 +82,18 @@ impl AddressIndex {
             return Ok(Vec::new());
         }
 
-        let searcher = self.reader.searcher();
-        if is_single_character(&normalized_query) {
-            return first_indexed_streets(&searcher, self.fields, limit);
-        }
-
         let query = autocomplete_query(self.fields.street_search_text, &normalized_query);
         // Fetch every matching address before deduplicating: a populous street can
         // otherwise consume the entire address result limit with house numbers.
-        let candidate_limit = usize::try_from(searcher.num_docs()).unwrap_or(usize::MAX);
+        // For one character, only inspect a bounded batch of prefix matches. This
+        // preserves the prefix filter while avoiding a scan of every matching
+        // address just to find a few distinct street names.
+        let searcher = self.reader.searcher();
+        let candidate_limit = if is_single_character(&normalized_query) {
+            limit.saturating_mul(500)
+        } else {
+            usize::try_from(searcher.num_docs()).unwrap_or(usize::MAX)
+        };
         search_tantivy_streets(&searcher, &query, self.fields, candidate_limit, limit)
     }
 
@@ -226,96 +225,6 @@ fn search_tantivy(
     }
 
     Ok(results)
-}
-
-/// Returns the first live documents in index order without evaluating a query.
-/// This is intentionally used for one-character autocomplete, where relevance is
-/// less useful than a response that is effectively immediate.
-fn first_indexed_addresses(
-    searcher: &Searcher,
-    fields: IndexFields,
-    limit: usize,
-) -> tantivy::Result<Vec<SearchResult>> {
-    let mut results = Vec::with_capacity(limit);
-
-    for (segment_ord, segment_reader) in searcher.segment_readers().iter().enumerate() {
-        for doc_id in 0..segment_reader.max_doc() {
-            if segment_reader.is_deleted(doc_id) {
-                continue;
-            }
-            let document: TantivyDocument =
-                searcher.doc(DocAddress::new(segment_ord as u32, doc_id))?;
-            let Some(address) = address_from_tantivy_doc(&document, fields) else {
-                continue;
-            };
-            results.push(SearchResult {
-                formatted: address.formatted().to_string(),
-                score: 0.0,
-                country_code: address.country_code.clone(),
-                address: address.structured(),
-            });
-            if results.len() == limit {
-                return Ok(results);
-            }
-        }
-    }
-
-    Ok(results)
-}
-
-fn first_indexed_streets(
-    searcher: &Searcher,
-    fields: IndexFields,
-    limit: usize,
-) -> tantivy::Result<Vec<SearchResult>> {
-    let mut streets = Vec::with_capacity(limit);
-    let mut seen = HashSet::new();
-
-    for (segment_ord, segment_reader) in searcher.segment_readers().iter().enumerate() {
-        for doc_id in 0..segment_reader.max_doc() {
-            if segment_reader.is_deleted(doc_id) {
-                continue;
-            }
-            let document: TantivyDocument =
-                searcher.doc(DocAddress::new(segment_ord as u32, doc_id))?;
-            let Some(address) = address_from_tantivy_doc(&document, fields) else {
-                continue;
-            };
-            let Some(thoroughfare) = address
-                .thoroughfare
-                .filter(|street| !street.trim().is_empty())
-            else {
-                continue;
-            };
-            let key = (address.country_code.clone(), normalize_text(&thoroughfare));
-            if !seen.insert(key) {
-                continue;
-            }
-
-            streets.push(SearchResult {
-                formatted: thoroughfare.clone(),
-                score: 0.0,
-                country_code: address.country_code.clone(),
-                address: StructuredAddress {
-                    country_code: address.country_code,
-                    admin_area: None,
-                    locality: None,
-                    dependent_locality: None,
-                    thoroughfare: Some(thoroughfare.clone()),
-                    premise: None,
-                    premise_type: None,
-                    subpremise: None,
-                    postal_code: None,
-                    full_address: thoroughfare,
-                },
-            });
-            if streets.len() == limit {
-                return Ok(streets);
-            }
-        }
-    }
-
-    Ok(streets)
 }
 
 fn search_tantivy_streets(
@@ -471,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn single_character_street_autocomplete_uses_first_indexed_streets() {
+    fn single_character_street_autocomplete_keeps_the_prefix_filter() {
         let (schema, fields) = address_schema();
         let index = Index::create_in_ram(schema);
         let mut writer = index.writer(15_000_000).unwrap();
@@ -501,10 +410,11 @@ mod tests {
             fields,
         };
 
-        let streets = address_index.search_streets("z", 2).unwrap();
-        assert_eq!(streets.len(), 2);
-        assert_eq!(streets[0].formatted, "Alpha Road");
-        assert_eq!(streets[1].formatted, "Baker Street");
+        let streets = address_index.search_streets("b", 2).unwrap();
+        assert_eq!(streets.len(), 1);
+        assert_eq!(streets[0].formatted, "Baker Street");
+
+        assert!(address_index.search_streets("z", 2).unwrap().is_empty());
     }
 
     #[test]
