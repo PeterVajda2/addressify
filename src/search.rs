@@ -81,7 +81,7 @@ impl AddressIndex {
             return Ok(Vec::new());
         }
 
-        let query = autocomplete_query(self.fields.search_text, &normalized_query);
+        let query = autocomplete_query(self.fields.thoroughfare, &normalized_query);
         let searcher = self.reader.searcher();
         // Fetch every matching address before deduplicating: a populous street can
         // otherwise consume the entire address result limit with house numbers.
@@ -313,10 +313,56 @@ fn document_optional_string(document: &TantivyDocument, field: Field) -> Option<
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use tantivy::schema::TantivyDocument;
+    use tantivy::{Index, ReloadPolicy};
+
+    use super::{AddressIndex, IndexStorage};
+    use crate::indexing::address_schema;
     use crate::normalize::normalize_text;
 
     #[test]
     fn normalize_query_folds_accents_and_symbols() {
         assert_eq!(normalize_text("Banská-Bystrica 15"), "banska bystrica 15");
+    }
+
+    #[test]
+    fn street_autocomplete_does_not_match_a_locality() {
+        let (schema, fields) = address_schema();
+        let index = Index::create_in_ram(schema);
+        let mut writer = index.writer(15_000_000).unwrap();
+
+        for (street, locality) in [("Alpha Road", "Beta"), ("Baker Street", "Alpha City")] {
+            let mut document = TantivyDocument::default();
+            document.add_text(fields.country_code, "SK");
+            document.add_text(fields.thoroughfare, street);
+            document.add_text(fields.locality, locality);
+            document.add_text(fields.full_address, format!("{street}, {locality}, SK"));
+            document.add_text(
+                fields.search_text,
+                format!("{street} {locality} sk").to_lowercase(),
+            );
+            writer.add_document(document).unwrap();
+        }
+        writer.commit().unwrap();
+
+        let reader = index
+            .reader_builder()
+            .reload_policy(ReloadPolicy::Manual)
+            .try_into()
+            .unwrap();
+        reader.reload().unwrap();
+        let address_index = AddressIndex {
+            _storage: IndexStorage::Persistent {
+                _path: PathBuf::new(),
+            },
+            reader,
+            fields,
+        };
+
+        let streets = address_index.search_streets("a", 10).unwrap();
+        assert_eq!(streets.len(), 1);
+        assert_eq!(streets[0].formatted, "Alpha Road");
     }
 }

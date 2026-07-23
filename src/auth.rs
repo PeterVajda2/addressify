@@ -154,7 +154,9 @@ pub fn extract_request_domain(req: &WebRequest<()>) -> Option<String> {
 }
 
 fn header_value<'a>(req: &'a WebRequest<()>, name: header::HeaderName) -> Option<&'a str> {
-    req.headers().get(name).and_then(|value| value.to_str().ok())
+    req.headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
 }
 
 fn parse_domain_from_url(value: &str) -> Option<String> {

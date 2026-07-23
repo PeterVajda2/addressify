@@ -461,7 +461,7 @@ mod tests {
         let admin_area = schema_builder.add_text_field("admin_area", STORED);
         let locality = schema_builder.add_text_field("locality", STORED);
         let dependent_locality = schema_builder.add_text_field("dependent_locality", STORED);
-        let thoroughfare = schema_builder.add_text_field("thoroughfare", STORED);
+        let thoroughfare = schema_builder.add_text_field("thoroughfare", TEXT | STORED);
         let premise = schema_builder.add_text_field("premise", STORED);
         let premise_type = schema_builder.add_text_field("premise_type", STORED);
         let subpremise = schema_builder.add_text_field("subpremise", STORED);

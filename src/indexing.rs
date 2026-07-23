@@ -80,7 +80,10 @@ pub fn build_indices_to_dir(
     Ok(indexed_counts)
 }
 
-pub fn load_indices_from_dir(country_codes: &[String], index_root: &Path) -> AppResult<AddressIndexes> {
+pub fn load_indices_from_dir(
+    country_codes: &[String],
+    index_root: &Path,
+) -> AppResult<AddressIndexes> {
     let mut by_country = HashMap::new();
 
     for country_code in country_codes {
@@ -135,7 +138,9 @@ pub fn address_schema() -> (Schema, IndexFields) {
     let admin_area = schema_builder.add_text_field("admin_area", STORED);
     let locality = schema_builder.add_text_field("locality", STORED);
     let dependent_locality = schema_builder.add_text_field("dependent_locality", STORED);
-    let thoroughfare = schema_builder.add_text_field("thoroughfare", STORED);
+    // Street-only autocomplete must not search the full address text: otherwise a
+    // match in a locality or postal code can suggest an unrelated street.
+    let thoroughfare = schema_builder.add_text_field("thoroughfare", TEXT | STORED);
     let premise = schema_builder.add_text_field("premise", STORED);
     let premise_type = schema_builder.add_text_field("premise_type", STORED);
     let subpremise = schema_builder.add_text_field("subpremise", STORED);
