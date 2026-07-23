@@ -14,6 +14,7 @@ use tempfile::TempDir;
 
 use crate::AppResult;
 use crate::models::Address;
+use crate::normalize::normalize_text;
 use crate::search::{AddressIndex, AddressIndexes, IndexFields, IndexStorage};
 
 pub fn build_indices_from_postgres(
@@ -147,6 +148,7 @@ pub fn address_schema() -> (Schema, IndexFields) {
     let postal_code = schema_builder.add_text_field("postal_code", STORED);
     let full_address = schema_builder.add_text_field("full_address", STORED);
     let search_text = schema_builder.add_text_field("search_text", TEXT);
+    let street_search_text = schema_builder.add_text_field("street_search_text", TEXT);
     let schema = schema_builder.build();
 
     (
@@ -163,6 +165,7 @@ pub fn address_schema() -> (Schema, IndexFields) {
             postal_code,
             full_address,
             search_text,
+            street_search_text,
         },
     )
 }
@@ -180,6 +183,7 @@ fn index_fields(schema: Schema) -> AppResult<IndexFields> {
         postal_code: schema.get_field("postal_code")?,
         full_address: schema.get_field("full_address")?,
         search_text: schema.get_field("search_text")?,
+        street_search_text: schema.get_field("street_search_text")?,
     })
 }
 
@@ -333,6 +337,9 @@ fn tantivy_document(address: &Address, fields: IndexFields) -> TantivyDocument {
     add_optional_text(&mut document, fields.postal_code, &address.postal_code);
     document.add_text(fields.full_address, address.formatted());
     document.add_text(fields.search_text, &address.search_text);
+    if let Some(thoroughfare) = &address.thoroughfare {
+        document.add_text(fields.street_search_text, normalize_text(thoroughfare));
+    }
     document
 }
 
