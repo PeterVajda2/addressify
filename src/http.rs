@@ -374,6 +374,7 @@ mod tests {
         assert!(!body.contains("api-key-input"));
         assert!(body.contains("&street_only"));
         assert!(body.contains("selectedStreet"));
+        assert!(body.contains("focusStreetInputAtEnd"));
         assert!(body.contains("fillStructuredFields(result)"));
     }
 

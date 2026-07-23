@@ -256,6 +256,12 @@
       postalCodeInput.value = "";
     }
 
+    function focusStreetInputAtEnd() {
+      streetInput.focus();
+      const end = streetInput.value.length;
+      streetInput.setSelectionRange(end, end);
+    }
+
     function clearSuggestions() {
       latestResults = [];
       latestResultsAreStreetOnly = false;
@@ -378,6 +384,8 @@
         return;
       }
 
+      event.stopPropagation();
+
       if (latestResultsAreStreetOnly) {
         selectedStreet = result.address.thoroughfare || result.formatted;
         streetInput.value = selectedStreet;
@@ -387,6 +395,7 @@
         fillStructuredFields(result);
       }
       clearSuggestions();
+      focusStreetInputAtEnd();
     });
   </script>
 </body>
