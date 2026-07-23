@@ -325,7 +325,7 @@ mod tests {
             .expect("app service");
 
         let mut req = WebRequest::default();
-        *req.uri_mut() = Uri::from_static("/search?q=hlavna&country=SK&street_only");
+        *req.uri_mut() = Uri::from_static("/search?q=hl&country=SK&street_only");
         *req.body_mut().socket_addr_mut() = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1234);
 
         let resp = service.call(req).await.expect("response");
@@ -334,9 +334,10 @@ mod tests {
         let body = collect_string_body(resp.into_body()).await.expect("body");
         let payload: JsonValue = serde_json::from_str(&body).expect("json body");
 
-        assert_eq!(payload["count"], 1);
+        assert_eq!(payload["count"], 2);
         assert_eq!(payload["results"][0]["formatted"], "Hlavna");
         assert_eq!(payload["results"][0]["address"]["thoroughfare"], "Hlavna");
+        assert_eq!(payload["results"][1]["formatted"], "Hlinkova");
         assert!(payload["results"][0]["address"]["premise"].is_null());
         assert!(payload["results"][0]["address"]["locality"].is_null());
         assert_eq!(payload["results"][0]["address"]["full_address"], "Hlavna");
@@ -417,6 +418,22 @@ mod tests {
             "hlavna 69 kosice 040 01 sk",
         );
         writer.add_document(test_document(&another_address, fields))?;
+        let hlinkova_address = Address::from_parts(
+            StructuredAddress {
+                country_code: String::from("SK"),
+                admin_area: Some(String::from("Kosicky kraj")),
+                locality: Some(String::from("Kosice")),
+                dependent_locality: None,
+                thoroughfare: Some(String::from("Hlinkova")),
+                premise: Some(String::from("1")),
+                premise_type: Some(String::from("building")),
+                subpremise: None,
+                postal_code: Some(String::from("040 01")),
+                full_address: String::from("Hlinkova 1, Kosice, 040 01, SK"),
+            },
+            "hlinkova 1 kosice 040 01 sk",
+        );
+        writer.add_document(test_document(&hlinkova_address, fields))?;
         writer.commit()?;
 
         let reader = index

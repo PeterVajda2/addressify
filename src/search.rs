@@ -134,13 +134,17 @@ pub async fn search_indexes_async(
         };
         results.extend(country_results);
     }
-    results.sort_by(|left, right| {
-        right
-            .score
-            .total_cmp(&left.score)
-            .then_with(|| left.formatted.cmp(&right.formatted))
-            .then_with(|| left.country_code.cmp(&right.country_code))
-    });
+    if street_only {
+        sort_streets_alphabetically(&mut results);
+    } else {
+        results.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| left.formatted.cmp(&right.formatted))
+                .then_with(|| left.country_code.cmp(&right.country_code))
+        });
+    }
     results.truncate(limit);
 
     Ok(results)
@@ -258,13 +262,21 @@ fn search_tantivy_streets(
                 full_address: thoroughfare,
             },
         });
-
-        if streets.len() == limit {
-            break;
-        }
     }
 
+    sort_streets_alphabetically(&mut streets);
+    streets.truncate(limit);
+
     Ok(streets)
+}
+
+fn sort_streets_alphabetically(streets: &mut [SearchResult]) {
+    streets.sort_by(|left, right| {
+        normalize_text(&left.formatted)
+            .cmp(&normalize_text(&right.formatted))
+            .then_with(|| left.formatted.cmp(&right.formatted))
+            .then_with(|| left.country_code.cmp(&right.country_code))
+    });
 }
 
 fn address_from_tantivy_doc(document: &TantivyDocument, fields: IndexFields) -> Option<Address> {
