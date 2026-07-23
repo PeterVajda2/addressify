@@ -38,6 +38,9 @@ and cut over the runtime bundle. Pass `--rebuild-indexes` for indexing schema
 or search-behavior changes. That mode builds into a sibling index directory
 while the service stays online, then swaps directories during the short service
 restart. The source checkout is still kept on `master` for troubleshooting.
+The service may take a brief systemd restart cycle after a binary cutover; wait
+for the health endpoint instead of treating the first connection refusal as a
+failed deployment.
 Confirm `systemctl is-active addresswise` is `active` and
 `curl --fail http://127.0.0.1:8080/health` succeeds before reporting
 completion.

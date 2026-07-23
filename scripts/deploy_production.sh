@@ -77,7 +77,15 @@ if [[ "$rebuild_indexes" == true ]]; then
 fi
 
 sudo systemctl start addresswise
-sudo systemctl is-active --quiet addresswise
-curl --fail --silent --show-error http://127.0.0.1:8080/health
+for attempt in {1..15}; do
+    if sudo systemctl is-active --quiet addresswise \
+        && curl --fail --silent --show-error http://127.0.0.1:8080/health; then
+        break
+    fi
+    if [[ "$attempt" == 15 ]]; then
+        exit 1
+    fi
+    sleep 1
+done
 cutover_started=false
 REMOTE_SCRIPT
