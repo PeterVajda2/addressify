@@ -168,6 +168,12 @@
       </div>
       <div class="grid">
         <div class="field">
+          <label for="api-key-input">API key</label>
+          <input id="api-key-input" name="api_key" type="text" placeholder="Public browser API key" spellcheck="false">
+        </div>
+      </div>
+      <div class="grid">
+        <div class="field">
           <label for="city-input">City</label>
           <input id="city-input" name="city" type="text" readonly>
         </div>
@@ -181,6 +187,7 @@
   <script>
     const form = document.getElementById("search-form");
     const streetInput = document.getElementById("street-input");
+    const apiKeyInput = document.getElementById("api-key-input");
     const cityInput = document.getElementById("city-input");
     const postalCodeInput = document.getElementById("postal-code-input");
     const panel = document.querySelector(".panel");
@@ -200,13 +207,22 @@
     let requestSequence = 0;
     let latestResults = [];
 
+    function pageApiKey() {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("api_key") || localStorage.getItem("addresswise_api_key") || "";
+    }
+
     async function runSearch(query) {
       if (activeController) {
         activeController.abort();
       }
 
       activeController = new AbortController();
-      const params = new URLSearchParams({ q: query, limit: "10" });
+      const params = new URLSearchParams({
+        q: query,
+        limit: "10",
+        api_key: apiKeyInput.value.trim(),
+      });
       const response = await fetch(`/search?${params.toString()}`, {
         method: "GET",
         cache: "no-store",
@@ -315,6 +331,12 @@
         void triggerSearch(streetInput.value.trim());
       }, 120);
     }
+
+    apiKeyInput.value = pageApiKey();
+
+    apiKeyInput.addEventListener("change", () => {
+      localStorage.setItem("addresswise_api_key", apiKeyInput.value.trim());
+    });
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();

@@ -10,11 +10,12 @@ use serde::{Deserialize, Serialize};
 use xitca_web::{
     App,
     handler::{handler_service, html::Html, json::Json, query::Query, state::StateRef},
-    http::StatusCode,
+    http::{StatusCode, WebRequest, WebResponse, header::CONTENT_TYPE},
     route::get,
 };
 
 use crate::AppResult;
+use crate::auth::{AuthState, ErrorResponse, error_status};
 use crate::models::SearchResult;
 use crate::search::{AddressIndexes, search_indexes_async};
 
@@ -22,11 +23,18 @@ const MAX_WORKERS: usize = 8;
 const BLOCKING_THREADS_PER_WORKER: usize = 8;
 pub const H3_CERT_PATH: &str = "/tmp/addresswise-h3-cert.der";
 
+pub struct AppState {
+    pub indexes: Arc<AddressIndexes>,
+    pub auth: AuthState,
+}
+
 #[derive(Debug, Deserialize)]
 struct SearchParams {
     q: Option<String>,
     country: Option<String>,
     limit: Option<usize>,
+    street_only: Option<String>,
+    api_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -43,7 +51,7 @@ struct HealthResponse {
     countries: Vec<String>,
 }
 
-pub fn serve(addr: String, indexes: Arc<AddressIndexes>) -> AppResult<()> {
+pub fn serve_with_state(addr: String, state: Arc<AppState>) -> AppResult<()> {
     let workers = std::thread::available_parallelism()
         .map(usize::from)
         .unwrap_or(1)
@@ -52,7 +60,7 @@ pub fn serve(addr: String, indexes: Arc<AddressIndexes>) -> AppResult<()> {
     let h3_config = quic_config()?;
 
     App::new()
-        .with_state(indexes)
+        .with_state(state)
         .at("/", get(handler_service(home)))
         .at("/health", get(handler_service(health)))
         .at("/search", get(handler_service(search)))
@@ -73,10 +81,11 @@ async fn home() -> Html<&'static str> {
     Html(include_str!("../static/index.html"))
 }
 
-async fn health(StateRef(indexes): StateRef<'_, Arc<AddressIndexes>>) -> Json<HealthResponse> {
+async fn health(StateRef(state): StateRef<'_, Arc<AppState>>) -> Json<HealthResponse> {
     Json(HealthResponse {
         ok: true,
-        countries: indexes
+        countries: state
+            .indexes
             .country_codes()
             .into_iter()
             .map(String::from)
@@ -85,27 +94,58 @@ async fn health(StateRef(indexes): StateRef<'_, Arc<AddressIndexes>>) -> Json<He
 }
 
 async fn search(
-    StateRef(indexes): StateRef<'_, Arc<AddressIndexes>>,
+    StateRef(state): StateRef<'_, Arc<AppState>>,
     Query(params): Query<SearchParams>,
-) -> Result<Json<SearchResponse>, StatusCode> {
+    req: &WebRequest<()>,
+    remote_addr: SocketAddr,
+) -> WebResponse {
     let query = params.q.unwrap_or_default();
     let country = normalize_country(params.country.as_deref());
     let limit = params.limit.unwrap_or(10).clamp(1, 50);
+    let street_only = is_street_only(params.street_only.as_deref());
 
     if let Some(country_code) = country.as_deref() {
-        if !indexes.has_country(country_code) {
-            return Err(StatusCode::BAD_REQUEST);
+        if !state.indexes.has_country(country_code) {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                ErrorResponse {
+                    error: "invalid_country",
+                    message: format!("country `{country_code}` is not indexed"),
+                },
+            );
         }
     }
 
-    match search_indexes_async(indexes.clone(), country.clone(), query.clone(), limit).await {
-        Ok(results) => Ok(Json(SearchResponse {
+    if let Err(error) = state
+        .auth
+        .authorize(req, remote_addr, params.api_key.as_deref())
+        .await
+    {
+        return json_error(error_status(&error), error);
+    }
+
+    match search_indexes_async(
+        state.indexes.clone(),
+        country.clone(),
+        query.clone(),
+        limit,
+        street_only,
+    )
+    .await
+    {
+        Ok(results) => json_ok(SearchResponse {
             query,
             country,
             count: results.len(),
             results,
-        })),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        }),
+        Err(error) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorResponse {
+                error: "search_failed",
+                message: format!("search failed: {error}"),
+            },
+        ),
     }
 }
 
@@ -114,6 +154,11 @@ fn normalize_country(country: Option<&str>) -> Option<String> {
         .map(str::trim)
         .map(str::to_uppercase)
         .filter(|country| !country.is_empty())
+}
+
+/// Street-only search is enabled only by the bare `street_only` query flag.
+fn is_street_only(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value.is_empty())
 }
 
 fn socket_addr(addr: &str) -> SocketAddr {
@@ -148,10 +193,40 @@ fn persist_cert(cert_der: &[u8]) -> AppResult<()> {
     Ok(())
 }
 
+fn json_ok<T>(payload: T) -> WebResponse
+where
+    T: Serialize,
+{
+    json_response(StatusCode::OK, &payload)
+}
+
+fn json_error(status: StatusCode, payload: ErrorResponse) -> WebResponse {
+    json_response(status, &payload)
+}
+
+fn json_response<T>(status: StatusCode, payload: &T) -> WebResponse
+where
+    T: Serialize,
+{
+    let body = serde_json::to_vec(payload).unwrap_or_else(|_| {
+        Vec::from(
+            br#"{"error":"internal_error","message":"failed to serialize response"}"#.as_slice(),
+        )
+    });
+    let mut response = WebResponse::new(body.into());
+    *response.status_mut() = status;
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        xitca_web::http::HeaderValue::from_static("application/json"),
+    );
+    response
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{health, home, normalize_country, search};
+    use super::{AppState, health, home, is_street_only, normalize_country, search};
     use std::collections::HashMap;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::Arc;
 
     use serde_json::Value as JsonValue;
@@ -167,6 +242,7 @@ mod tests {
         test::collect_string_body,
     };
 
+    use crate::auth::AuthState;
     use crate::models::{Address, StructuredAddress};
     use crate::search::{AddressIndex, AddressIndexes, IndexFields, IndexStorage};
 
@@ -175,9 +251,20 @@ mod tests {
         assert_eq!(normalize_country(Some(" sk ")), Some(String::from("SK")));
     }
 
+    #[test]
+    fn street_only_flag_requires_bare_parameter() {
+        assert!(is_street_only(Some("")));
+        assert!(!is_street_only(Some("true")));
+        assert!(!is_street_only(Some("1")));
+        assert!(!is_street_only(Some("false")));
+    }
+
     #[tokio::test]
     async fn search_endpoint_returns_structured_address_fields() {
-        let indexes = Arc::new(test_indexes().expect("test index"));
+        let indexes = Arc::new(AppState {
+            indexes: Arc::new(test_indexes().expect("test index")),
+            auth: AuthState::Disabled,
+        });
         let service = App::new()
             .with_state(indexes)
             .at("/", get(handler_service(home)))
@@ -190,7 +277,12 @@ mod tests {
             .expect("app service");
 
         let mut req = WebRequest::default();
-        *req.uri_mut() = Uri::from_static("/search?q=hlavna&country=SK");
+        *req.uri_mut() = Uri::from_static("/search?q=hlavna&country=SK&limit=1&api_key=test");
+        req.headers_mut().insert(
+            xitca_web::http::header::ORIGIN,
+            xitca_web::http::HeaderValue::from_static("https://addresswise.eu"),
+        );
+        *req.body_mut().socket_addr_mut() = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1234);
 
         let resp = service.call(req).await.expect("response");
         assert_eq!(resp.status(), StatusCode::OK);
@@ -204,17 +296,53 @@ mod tests {
         assert_eq!(payload["results"][0]["country_code"], "SK");
         assert_eq!(payload["results"][0]["address"]["country_code"], "SK");
         assert_eq!(payload["results"][0]["address"]["thoroughfare"], "Hlavna");
-        assert_eq!(payload["results"][0]["address"]["premise"], "68");
+        assert!(payload["results"][0]["address"]["premise"].is_string());
         assert_eq!(payload["results"][0]["address"]["postal_code"], "040 01");
-        assert_eq!(
-            payload["results"][0]["address"]["full_address"],
-            "Hlavna 68, Kosice, 040 01, SK"
+        assert!(
+            payload["results"][0]["address"]["full_address"]
+                .as_str()
+                .is_some_and(|address| address.starts_with("Hlavna "))
         );
     }
 
     #[tokio::test]
+    async fn street_only_search_returns_distinct_streets_without_address_details() {
+        let indexes = Arc::new(AppState {
+            indexes: Arc::new(test_indexes().expect("test index")),
+            auth: AuthState::Disabled,
+        });
+        let service = App::new()
+            .with_state(indexes)
+            .at("/search", get(handler_service(search)))
+            .finish()
+            .call(())
+            .await
+            .expect("app service");
+
+        let mut req = WebRequest::default();
+        *req.uri_mut() = Uri::from_static("/search?q=hlavna&country=SK&street_only");
+        *req.body_mut().socket_addr_mut() = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1234);
+
+        let resp = service.call(req).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = collect_string_body(resp.into_body()).await.expect("body");
+        let payload: JsonValue = serde_json::from_str(&body).expect("json body");
+
+        assert_eq!(payload["count"], 1);
+        assert_eq!(payload["results"][0]["formatted"], "Hlavna");
+        assert_eq!(payload["results"][0]["address"]["thoroughfare"], "Hlavna");
+        assert!(payload["results"][0]["address"]["premise"].is_null());
+        assert!(payload["results"][0]["address"]["locality"].is_null());
+        assert_eq!(payload["results"][0]["address"]["full_address"], "Hlavna");
+    }
+
+    #[tokio::test]
     async fn home_endpoint_returns_html() {
-        let indexes = Arc::new(test_indexes().expect("test index"));
+        let indexes = Arc::new(AppState {
+            indexes: Arc::new(test_indexes().expect("test index")),
+            auth: AuthState::Disabled,
+        });
         let service = App::new()
             .with_state(indexes)
             .at("/", get(handler_service(home)))
@@ -236,6 +364,7 @@ mod tests {
         assert!(body.contains("label for=\"city-input\">City</label>"));
         assert!(body.contains("label for=\"postal-code-input\">Postal code</label>"));
         assert!(body.contains("section class=\"panel\""));
+        assert!(body.contains("api_key"));
         assert!(body.contains("fillStructuredFields(result)"));
     }
 
@@ -261,6 +390,22 @@ mod tests {
         );
 
         writer.add_document(test_document(&address, fields))?;
+        let another_address = Address::from_parts(
+            StructuredAddress {
+                country_code: String::from("SK"),
+                admin_area: Some(String::from("Kosicky kraj")),
+                locality: Some(String::from("Kosice")),
+                dependent_locality: None,
+                thoroughfare: Some(String::from("Hlavna")),
+                premise: Some(String::from("69")),
+                premise_type: Some(String::from("building")),
+                subpremise: None,
+                postal_code: Some(String::from("040 01")),
+                full_address: String::from("Hlavna 69, Kosice, 040 01, SK"),
+            },
+            "hlavna 69 kosice 040 01 sk",
+        );
+        writer.add_document(test_document(&another_address, fields))?;
         writer.commit()?;
 
         let reader = index

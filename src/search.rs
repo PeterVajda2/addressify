@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -71,6 +71,24 @@ impl AddressIndex {
         search_tantivy(&searcher, &query, self.fields, limit)
     }
 
+    pub fn search_streets(
+        &self,
+        user_input: &str,
+        limit: usize,
+    ) -> tantivy::Result<Vec<SearchResult>> {
+        let normalized_query = normalize_text(user_input);
+        if normalized_query.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let query = autocomplete_query(self.fields.search_text, &normalized_query);
+        let searcher = self.reader.searcher();
+        // Fetch every matching address before deduplicating: a populous street can
+        // otherwise consume the entire address result limit with house numbers.
+        let candidate_limit = usize::try_from(searcher.num_docs()).unwrap_or(usize::MAX);
+        search_tantivy_streets(&searcher, &query, self.fields, candidate_limit, limit)
+    }
+
     pub fn doc_count(&self) -> u64 {
         self.reader.searcher().num_docs()
     }
@@ -92,6 +110,7 @@ pub async fn search_indexes_async(
     country: Option<String>,
     query: String,
     limit: usize,
+    street_only: bool,
 ) -> AppResult<Vec<SearchResult>> {
     if let Some(country) = country {
         let index = indexes
@@ -99,12 +118,21 @@ pub async fn search_indexes_async(
             .get(&country)
             .cloned()
             .ok_or_else(|| format!("unknown country {country}"))?;
-        return search_async(index, query, limit).await;
+        return if street_only {
+            search_streets_async(index, query, limit).await
+        } else {
+            search_async(index, query, limit).await
+        };
     }
 
     let mut results = Vec::new();
     for index in indexes.by_country.values() {
-        results.extend(search_async(Arc::clone(index), query.clone(), limit).await?);
+        let country_results = if street_only {
+            search_streets_async(Arc::clone(index), query.clone(), limit).await?
+        } else {
+            search_async(Arc::clone(index), query.clone(), limit).await?
+        };
+        results.extend(country_results);
     }
     results.sort_by(|left, right| {
         right
@@ -116,6 +144,17 @@ pub async fn search_indexes_async(
     results.truncate(limit);
 
     Ok(results)
+}
+
+async fn search_streets_async(
+    index: Arc<AddressIndex>,
+    query: String,
+    limit: usize,
+) -> AppResult<Vec<SearchResult>> {
+    let result = spawn_blocking(move || index.search_streets(&query, limit))
+        .await
+        .map_err(|error| format!("blocking search task failed: {error}"))?;
+    result.map_err(Into::into)
 }
 
 fn autocomplete_query(search_field: Field, normalized_query: &str) -> Box<dyn Query> {
@@ -170,6 +209,62 @@ fn search_tantivy(
     }
 
     Ok(results)
+}
+
+fn search_tantivy_streets(
+    searcher: &Searcher,
+    query: &dyn Query,
+    fields: IndexFields,
+    candidate_limit: usize,
+    limit: usize,
+) -> tantivy::Result<Vec<SearchResult>> {
+    let top_docs = searcher.search(
+        query,
+        &TopDocs::with_limit(candidate_limit).order_by_score(),
+    )?;
+    let mut streets = Vec::with_capacity(limit);
+    let mut seen = HashSet::new();
+
+    for (score, doc_address) in top_docs {
+        let retrieved_doc: TantivyDocument = searcher.doc(doc_address)?;
+        let Some(address) = address_from_tantivy_doc(&retrieved_doc, fields) else {
+            continue;
+        };
+        let Some(thoroughfare) = address
+            .thoroughfare
+            .filter(|street| !street.trim().is_empty())
+        else {
+            continue;
+        };
+        let key = (address.country_code.clone(), normalize_text(&thoroughfare));
+        if !seen.insert(key) {
+            continue;
+        }
+
+        streets.push(SearchResult {
+            formatted: thoroughfare.clone(),
+            score,
+            country_code: address.country_code.clone(),
+            address: StructuredAddress {
+                country_code: address.country_code,
+                admin_area: None,
+                locality: None,
+                dependent_locality: None,
+                thoroughfare: Some(thoroughfare.clone()),
+                premise: None,
+                premise_type: None,
+                subpremise: None,
+                postal_code: None,
+                full_address: thoroughfare,
+            },
+        });
+
+        if streets.len() == limit {
+            break;
+        }
+    }
+
+    Ok(streets)
 }
 
 fn address_from_tantivy_doc(document: &TantivyDocument, fields: IndexFields) -> Option<Address> {

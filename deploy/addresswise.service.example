@@ -10,6 +10,7 @@ Environment=PORT=8080
 Environment=COUNTRY_CODES=CZ,SK
 Environment=INDEX_DIR=/opt/addresswise/data/indexes
 Environment=DATABASE_URL=postgres://address:password@127.0.0.1:5432/address_wise
+ExecStartPre=/opt/addresswise/target/release/addresswise migrate
 ExecStartPre=/opt/addresswise/target/release/addresswise build-indexes
 ExecStart=/opt/addresswise/target/release/addresswise serve
 Restart=always

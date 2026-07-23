@@ -7,6 +7,7 @@ The binary now supports three modes:
 - `addresswise build-indexes`
 - `addresswise serve`
 - `addresswise dev`
+- `addresswise migrate`
 
 Recommended production flow:
 
@@ -14,6 +15,7 @@ Recommended production flow:
 2. Start the API with `serve`.
 
 `serve` only loads Tantivy indexes from disk. It does not rebuild them and it does not shell into containers.
+`serve` now requires PostgreSQL access because API-key auth and usage tracking are enforced on each request.
 
 ## Required environment
 
@@ -52,6 +54,13 @@ DATABASE_URL=postgres://address:password@127.0.0.1:5432/address_wise \
 ./target/release/addresswise build-indexes
 ```
 
+Apply schema migrations:
+
+```bash
+DATABASE_URL=postgres://address:password@127.0.0.1:5432/address_wise \
+./target/release/addresswise migrate
+```
+
 Serve from existing indexes:
 
 ```bash
@@ -59,6 +68,7 @@ HOST=0.0.0.0 \
 PORT=8080 \
 COUNTRY_CODES=CZ,SK \
 INDEX_DIR=/opt/addresswise/data/indexes \
+DATABASE_URL=postgres://address:password@127.0.0.1:5432/address_wise \
 ./target/release/addresswise serve
 ```
 
@@ -69,6 +79,32 @@ COUNTRY_CODES=CZ,SK \
 DATABASE_URL=postgres://address:password@127.0.0.1:5432/address_wise \
 ./target/release/addresswise dev
 ```
+
+## API key tables
+
+The autocomplete endpoints `/search` and `/suggest` now require:
+
+- `api_key` query parameter
+- `Origin` or `Referer` header whose host matches a row in `api_key_domains`
+
+Seed one key and one allowed domain:
+
+```sql
+insert into api_keys (api_key, label)
+values ('replace-with-public-key', 'addresswise.eu browser key')
+on conflict (api_key) do nothing;
+
+insert into api_key_domains (api_key_id, domain)
+select id, 'addresswise.eu'
+from api_keys
+where api_key = 'replace-with-public-key'
+on conflict (api_key_id, domain) do nothing;
+```
+
+Usage is tracked in:
+
+- `api_keys.total_requests`
+- `api_key_usage_daily`
 
 ## HTTP/3
 
