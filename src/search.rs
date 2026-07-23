@@ -27,6 +27,7 @@ pub struct IndexFields {
     pub full_address: Field,
     pub search_text: Field,
     pub street_search_text: Field,
+    pub street_prefix_text: Field,
 }
 
 pub struct AddressIndex {
@@ -82,7 +83,12 @@ impl AddressIndex {
             return Ok(Vec::new());
         }
 
-        let query = autocomplete_query(self.fields.street_search_text, &normalized_query);
+        let street_field = if is_single_character(&normalized_query) {
+            self.fields.street_prefix_text
+        } else {
+            self.fields.street_search_text
+        };
+        let query = autocomplete_query(street_field, &normalized_query);
         // Fetch every matching address before deduplicating: a populous street can
         // otherwise consume the entire address result limit with house numbers.
         // For one character, only inspect a bounded batch of prefix matches. This
@@ -350,6 +356,7 @@ mod tests {
             document.add_text(fields.country_code, "SK");
             document.add_text(fields.thoroughfare, street);
             document.add_text(fields.street_search_text, normalize_text(street));
+            document.add_text(fields.street_prefix_text, normalize_text(street));
             document.add_text(fields.locality, locality);
             document.add_text(fields.full_address, format!("{street}, {locality}, SK"));
             document.add_text(
@@ -390,6 +397,7 @@ mod tests {
             document.add_text(fields.country_code, "SK");
             document.add_text(fields.thoroughfare, street);
             document.add_text(fields.street_search_text, normalize_text(street));
+            document.add_text(fields.street_prefix_text, normalize_text(street));
             document.add_text(fields.full_address, format!("{street}, SK"));
             document.add_text(fields.search_text, normalize_text(street));
             writer.add_document(document).unwrap();
@@ -426,6 +434,7 @@ mod tests {
         document.add_text(fields.country_code, "SK");
         document.add_text(fields.thoroughfare, "Na paseká");
         document.add_text(fields.street_search_text, "na paseka");
+        document.add_text(fields.street_prefix_text, "na paseka");
         document.add_text(fields.full_address, "Na paseká, SK");
         document.add_text(fields.search_text, "na paseka sk");
         writer.add_document(document).unwrap();

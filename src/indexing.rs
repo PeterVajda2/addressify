@@ -149,6 +149,7 @@ pub fn address_schema() -> (Schema, IndexFields) {
     let full_address = schema_builder.add_text_field("full_address", STORED);
     let search_text = schema_builder.add_text_field("search_text", TEXT);
     let street_search_text = schema_builder.add_text_field("street_search_text", TEXT);
+    let street_prefix_text = schema_builder.add_text_field("street_prefix_text", STRING);
     let schema = schema_builder.build();
 
     (
@@ -166,6 +167,7 @@ pub fn address_schema() -> (Schema, IndexFields) {
             full_address,
             search_text,
             street_search_text,
+            street_prefix_text,
         },
     )
 }
@@ -184,6 +186,7 @@ fn index_fields(schema: Schema) -> AppResult<IndexFields> {
         full_address: schema.get_field("full_address")?,
         search_text: schema.get_field("search_text")?,
         street_search_text: schema.get_field("street_search_text")?,
+        street_prefix_text: schema.get_field("street_prefix_text")?,
     })
 }
 
@@ -339,6 +342,7 @@ fn tantivy_document(address: &Address, fields: IndexFields) -> TantivyDocument {
     document.add_text(fields.search_text, &address.search_text);
     if let Some(thoroughfare) = &address.thoroughfare {
         document.add_text(fields.street_search_text, normalize_text(thoroughfare));
+        document.add_text(fields.street_prefix_text, normalize_text(thoroughfare));
     }
     document
 }

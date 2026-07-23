@@ -469,6 +469,7 @@ mod tests {
         let full_address = schema_builder.add_text_field("full_address", STORED);
         let search_text = schema_builder.add_text_field("search_text", TEXT);
         let street_search_text = schema_builder.add_text_field("street_search_text", TEXT);
+        let street_prefix_text = schema_builder.add_text_field("street_prefix_text", STRING);
         let schema = schema_builder.build();
         let index = Index::create_in_dir(index_dir, schema)?;
 
@@ -487,6 +488,7 @@ mod tests {
                 full_address,
                 search_text,
                 street_search_text,
+                street_prefix_text,
             },
         ))
     }
@@ -521,7 +523,14 @@ mod tests {
         document.add_text(fields.full_address, &address.full_address);
         document.add_text(fields.search_text, &address.search_text);
         if let Some(value) = &address.thoroughfare {
-            document.add_text(fields.street_search_text, crate::normalize::normalize_text(value));
+            document.add_text(
+                fields.street_search_text,
+                crate::normalize::normalize_text(value),
+            );
+            document.add_text(
+                fields.street_prefix_text,
+                crate::normalize::normalize_text(value),
+            );
         }
         document
     }
