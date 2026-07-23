@@ -206,13 +206,15 @@
     let pendingTimer = null;
     let requestSequence = 0;
     let latestResults = [];
+    let latestResultsAreStreetOnly = false;
+    let selectedStreet = "";
 
     function pageApiKey() {
       const params = new URLSearchParams(window.location.search);
       return params.get("api_key") || localStorage.getItem("addresswise_api_key") || "";
     }
 
-    async function runSearch(query) {
+    async function runSearch(query, streetOnly) {
       if (activeController) {
         activeController.abort();
       }
@@ -223,7 +225,8 @@
         limit: "10",
         api_key: apiKeyInput.value.trim(),
       });
-      const response = await fetch(`/search?${params.toString()}`, {
+      const streetOnlyFlag = streetOnly ? "&street_only" : "";
+      const response = await fetch(`/search?${params.toString()}${streetOnlyFlag}`, {
         method: "GET",
         cache: "no-store",
         credentials: "same-origin",
@@ -265,12 +268,14 @@
 
     function clearSuggestions() {
       latestResults = [];
+      latestResultsAreStreetOnly = false;
       results.innerHTML = "";
       panel.classList.remove("visible");
     }
 
-    function renderResults(payload) {
+    function renderResults(payload, streetOnly) {
       latestResults = payload.results;
+      latestResultsAreStreetOnly = streetOnly;
       if (!payload.results.length) {
         panel.classList.remove("visible");
         results.innerHTML = "";
@@ -293,23 +298,38 @@
         .join("");
     }
 
+    function streetOnlyFor(query) {
+      if (!selectedStreet) {
+        return true;
+      }
+
+      if (query.startsWith(`${selectedStreet} `)) {
+        return false;
+      }
+
+      selectedStreet = "";
+      return true;
+    }
+
     async function triggerSearch(query) {
       if (!query) {
         if (activeController) {
           activeController.abort();
           activeController = null;
         }
+        selectedStreet = "";
         clearSuggestions();
         clearStructuredFields();
         return;
       }
 
       const currentRequest = ++requestSequence;
+      const streetOnly = streetOnlyFor(query);
 
       try {
-        const payload = await runSearch(query);
+        const payload = await runSearch(query, streetOnly);
         if (currentRequest === requestSequence) {
-          renderResults(payload);
+          renderResults(payload, streetOnly);
         }
       } catch (error) {
         if (error.name === "AbortError") {
@@ -374,7 +394,14 @@
         return;
       }
 
-      fillStructuredFields(result);
+      if (latestResultsAreStreetOnly) {
+        selectedStreet = result.address.thoroughfare || result.formatted;
+        streetInput.value = selectedStreet;
+        clearStructuredFields();
+      } else {
+        selectedStreet = result.address.thoroughfare || "";
+        fillStructuredFields(result);
+      }
       clearSuggestions();
     });
   </script>

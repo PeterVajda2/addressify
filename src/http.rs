@@ -365,6 +365,8 @@ mod tests {
         assert!(body.contains("label for=\"postal-code-input\">Postal code</label>"));
         assert!(body.contains("section class=\"panel\""));
         assert!(body.contains("api_key"));
+        assert!(body.contains("&street_only"));
+        assert!(body.contains("selectedStreet"));
         assert!(body.contains("fillStructuredFields(result)"));
     }
 
