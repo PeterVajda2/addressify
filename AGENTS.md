@@ -30,6 +30,8 @@ Production host: `peter@31.220.81.20`.
 - Runtime indexes live at `/home/peter/addresswise-deploy/data/indexes`.
 - Runtime secrets, including `DATABASE_URL`, are in `/etc/addresswise.env` and
   must never be printed or committed.
+- Production has no usable `cargo` in its non-interactive shell. Build release
+  binaries locally; do not rely on remote compilation.
 
 Use `scripts/deploy_production.sh` to build locally, upload a staged binary,
 and cut over the runtime bundle. Pass `--rebuild-indexes` for indexing schema
