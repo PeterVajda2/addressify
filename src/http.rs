@@ -395,6 +395,9 @@ mod tests {
         let body = collect_string_body(resp.into_body()).await.expect("body");
         assert!(body.contains("<title>addresswise</title>"));
         assert!(body.contains("id=\"search-form\""));
+        assert!(body.contains("id=\"country-input\""));
+        assert!(body.contains("Select a country"));
+        assert!(body.contains("streetInput.disabled = !countryInput.value"));
         assert!(body.contains("label for=\"street-input\">Street</label>"));
         assert!(body.contains("label for=\"city-input\">City</label>"));
         assert!(body.contains("label for=\"postal-code-input\">Postal code</label>"));

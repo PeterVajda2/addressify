@@ -19,6 +19,6 @@ serde_json = "*"
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres"] }
 tantivy = "*"
 tempfile = "*"
-tokio = { version = "*", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "*", features = ["macros", "rt-multi-thread", "time"] }
 url = "2"
 xitca-web = { version = "0.8.1", features = ["http2", "http3", "json", "urlencoded"] }

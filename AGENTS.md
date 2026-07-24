@@ -13,7 +13,9 @@ authorization and usage tracking are backed by PostgreSQL.
 - The binary commands are `serve`, `build-indexes`, `migrate`, and `dev`.
 - `scripts/public_benchmark.py` fails on HTTP errors. Supply its API key through
   `ADDRESSWISE_BENCHMARK_API_KEY`; use `--street-only --all-countries` to
-  reproduce the demo's autocomplete path.
+  reproduce the API's cross-country autocomplete path. Each run writes
+  revision-stamped JSON, including per-prefix percentiles, to
+  `benchmark-results/` unless `--results-dir ''` disables it.
 - `DEPLOY.md` documents runtime environment variables and API behavior.
 
 ## Production deployment

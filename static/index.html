@@ -65,7 +65,8 @@
       text-transform: uppercase;
       color: var(--muted);
     }
-    input {
+    input,
+    select {
       width: 100%;
       padding: 0.9rem 1rem;
       border-radius: 0;
@@ -75,12 +76,14 @@
       font: inherit;
       font-size: 1rem;
     }
-    input:focus {
+    input:focus,
+    select:focus {
       outline: none;
       border-color: var(--ink);
       box-shadow: 0 0 0 0.15rem rgba(0, 0, 0, 0.08);
     }
-    input[readonly] {
+    input[readonly],
+    input:disabled {
       background: #f8f8f8;
     }
     .grid {
@@ -159,9 +162,17 @@
   <main>
     <h1>addresswise</h1>
     <form id="search-form">
+        <div class="field">
+          <label for="country-input">Country</label>
+          <select id="country-input" name="country" required>
+            <option value="" selected disabled>Select a country</option>
+            <option value="CZ">Czechia</option>
+            <option value="SK">Slovakia</option>
+          </select>
+        </div>
         <div class="field field-street">
           <label for="street-input">Street</label>
-          <input id="street-input" name="q" type="text" placeholder="Type a street or address" autocomplete="street-address" spellcheck="false">
+          <input id="street-input" name="q" type="text" placeholder="Select a country first" autocomplete="street-address" spellcheck="false" disabled>
           <section class="panel" aria-label="Suggestions">
             <ul class="suggestions" id="results"></ul>
           </section>
@@ -180,6 +191,7 @@
   </main>
   <script>
     const form = document.getElementById("search-form");
+    const countryInput = document.getElementById("country-input");
     const streetInput = document.getElementById("street-input");
     const cityInput = document.getElementById("city-input");
     const postalCodeInput = document.getElementById("postal-code-input");
@@ -204,7 +216,7 @@
     let latestResultsAreStreetOnly = false;
     let selectedStreet = "";
 
-    async function runSearch(query, streetOnly) {
+    async function runSearch(query, country, streetOnly) {
       if (activeController) {
         activeController.abort();
       }
@@ -212,6 +224,7 @@
       activeController = new AbortController();
       const params = new URLSearchParams({
         q: query,
+        country,
         limit: "10",
         api_key: demoApiKey,
       });
@@ -308,6 +321,10 @@
     }
 
     async function triggerSearch(query) {
+      const country = countryInput.value;
+      if (!country) {
+        return;
+      }
       if (!query) {
         if (activeController) {
           activeController.abort();
@@ -323,7 +340,7 @@
       const streetOnly = streetOnlyFor(query);
 
       try {
-        const payload = await runSearch(query, streetOnly);
+        const payload = await runSearch(query, country, streetOnly);
         if (currentRequest === requestSequence) {
           renderResults(payload, streetOnly);
         }
@@ -360,6 +377,27 @@
     streetInput.addEventListener("input", () => {
       clearStructuredFields();
       scheduleSearch();
+    });
+
+    countryInput.addEventListener("change", () => {
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        pendingTimer = null;
+      }
+      if (activeController) {
+        activeController.abort();
+        activeController = null;
+      }
+      ++requestSequence;
+      selectedStreet = "";
+      streetInput.value = "";
+      streetInput.disabled = !countryInput.value;
+      streetInput.placeholder = countryInput.value ? "Type a street or address" : "Select a country first";
+      clearSuggestions();
+      clearStructuredFields();
+      if (countryInput.value) {
+        streetInput.focus();
+      }
     });
 
     document.addEventListener("click", (event) => {

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tantivy::collector::TopDocs;
-use tantivy::query::{BooleanQuery, FuzzyTermQuery, Occur, Query, TermQuery};
+use tantivy::query::{BooleanQuery, FuzzyTermQuery, Occur, Query, RegexQuery, TermQuery};
 use tantivy::schema::{Field, IndexRecordOption, TantivyDocument, Value};
 use tantivy::{IndexReader, Searcher, Term};
 use tempfile::TempDir;
@@ -84,12 +84,13 @@ impl AddressIndex {
             return Ok(Vec::new());
         }
 
-        let street_field = if is_single_character(&normalized_query) {
-            self.fields.street_prefix_text
-        } else {
-            self.fields.street_search_text
-        };
-        let query = autocomplete_query(street_field, &normalized_query);
+        // Streets are stored as normalized whole values in the dedicated index.
+        // An exact prefix query is both the desired autocomplete behavior and
+        // avoids expanding common prefixes through Tantivy's fuzzy term query.
+        let query = RegexQuery::from_pattern(
+            &format!("{normalized_query}.*"),
+            self.fields.street_prefix_text,
+        )?;
         let searcher = self.street_reader.searcher();
         search_tantivy_streets(&searcher, &query, self.fields, limit, limit)
     }
@@ -97,10 +98,6 @@ impl AddressIndex {
     pub fn doc_count(&self) -> u64 {
         self.reader.searcher().num_docs()
     }
-}
-
-fn is_single_character(query: &str) -> bool {
-    query.chars().count() == 1
 }
 
 pub async fn search_async(
@@ -139,19 +136,10 @@ pub async fn search_indexes_async(
         };
     }
 
-    let mut results = Vec::new();
-    for index in indexes.by_country.values() {
-        let country_results = if street_only {
-            search_streets_async(Arc::clone(index), query.clone(), limit).await?
-        } else {
-            search_async(Arc::clone(index), query.clone(), limit).await?
-        };
-        results.extend(country_results);
-    }
+    let mut results =
+        search_all_countries(Arc::clone(&indexes), query.clone(), limit, street_only).await?;
     if street_only && results.is_empty() {
-        for index in indexes.by_country.values() {
-            results.extend(search_async(Arc::clone(index), query.clone(), limit).await?);
-        }
+        results = search_all_countries(indexes, query.clone(), limit, false).await?;
         results.sort_by(|left, right| {
             right
                 .score
@@ -172,6 +160,34 @@ pub async fn search_indexes_async(
     }
     results.truncate(limit);
 
+    Ok(results)
+}
+
+async fn search_all_countries(
+    indexes: Arc<AddressIndexes>,
+    query: String,
+    limit: usize,
+    street_only: bool,
+) -> AppResult<Vec<SearchResult>> {
+    let mut tasks = tokio::task::JoinSet::new();
+    for index in indexes.by_country.values() {
+        let index = Arc::clone(index);
+        let query = query.clone();
+        tasks.spawn(async move {
+            if street_only {
+                search_streets_async(index, query, limit).await
+            } else {
+                search_async(index, query, limit).await
+            }
+        });
+    }
+
+    let mut results = Vec::new();
+    while let Some(country_results) = tasks.join_next().await {
+        results.extend(
+            country_results.map_err(|error| format!("country search task failed: {error}"))??,
+        );
+    }
     Ok(results)
 }
 
@@ -392,6 +408,7 @@ mod tests {
         let streets = address_index.search_streets("al", 10).unwrap();
         assert_eq!(streets.len(), 1);
         assert_eq!(streets[0].formatted, "Alpha Road");
+        assert!(address_index.search_streets("pha", 10).unwrap().is_empty());
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 import argparse
 import concurrent.futures
+from datetime import UTC, datetime
 import json
 import os
 import statistics
@@ -105,6 +106,11 @@ def parse_args() -> argparse.Namespace:
         "--all-countries",
         action="store_true",
         help="Omit the country parameter and search every loaded country index.",
+    )
+    parser.add_argument(
+        "--results-dir",
+        default="benchmark-results",
+        help="Directory for timestamped JSON results (set to an empty string to disable saving).",
     )
     parser.add_argument(
         "--monitor-host",
@@ -261,6 +267,7 @@ def run_worker(
         "country": country,
         "query": query,
         "chars": len(query),
+        "prefixes": prefixes(query),
         "request_times_ms": timings[1:],
         "total_ms": total_ms,
     }
@@ -295,6 +302,10 @@ def run_protocol(
     wall_ms = (time.perf_counter() - wall_started) * 1000.0
     request_times = [timing for result in results for timing in result["request_times_ms"]]
     totals = [result["total_ms"] for result in results]
+    times_by_prefix: dict[str, list[float]] = {}
+    for result in results:
+        for prefix, timing in zip(result["prefixes"], result["request_times_ms"], strict=True):
+            times_by_prefix.setdefault(prefix, []).append(timing)
 
     return {
         "protocol": name,
@@ -305,16 +316,33 @@ def run_protocol(
         "wall_clock_ms": wall_ms,
         "per_request_ms": stats(request_times),
         "per_address_total_ms": stats(totals),
+        "per_prefix_ms": {
+            prefix: stats(times)
+            for prefix, times in sorted(times_by_prefix.items())
+        },
     }
 
 
 def stats(values: list[float]) -> dict:
+    ordered = sorted(values)
     return {
         "average": sum(values) / len(values),
         "median": statistics.median(values),
+        "p95": percentile(ordered, 0.95),
+        "p99": percentile(ordered, 0.99),
         "min": min(values),
         "max": max(values),
     }
+
+
+def percentile(ordered_values: list[float], quantile: float) -> float:
+    index = max(0, min(len(ordered_values) - 1, int(len(ordered_values) * quantile + 0.999999) - 1))
+    return ordered_values[index]
+
+
+def git_revision() -> str | None:
+    proc = run_command(["git", "rev-parse", "HEAD"], check=False)
+    return proc.stdout.strip() or None
 
 
 def start_monitor(host: str, label: str, seconds: int, interval: float) -> tuple[int, str]:
@@ -396,6 +424,8 @@ def main() -> int:
     )
 
     output = {
+        "created_at": datetime.now(UTC).isoformat(),
+        "git_revision": git_revision(),
         "base_url": args.base_url,
         "workers": args.workers,
         "sample_size": args.sample_size,
@@ -438,6 +468,15 @@ def main() -> int:
 
     json.dump(output, sys.stdout, indent=2, ensure_ascii=False)
     sys.stdout.write("\n")
+    if args.results_dir:
+        results_dir = Path(args.results_dir)
+        results_dir.mkdir(parents=True, exist_ok=True)
+        revision = output["git_revision"] or "unknown"
+        filename = f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}_{revision[:12]}.json"
+        (results_dir / filename).write_text(
+            json.dumps(output, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
     return 0
 
 

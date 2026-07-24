@@ -1,6 +1,9 @@
+use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use sqlx::postgres::PgPoolOptions;
@@ -9,11 +12,31 @@ use url::Url;
 use xitca_web::http::{StatusCode, WebRequest, header};
 
 const MIGRATIONS_DIR: &str = "db";
+const AUTH_CACHE_TTL: Duration = Duration::from_secs(30);
+const USAGE_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub enum AuthState {
     Disabled,
-    Enabled(PgPool),
+    Enabled(Arc<AuthService>),
+}
+
+pub(crate) struct AuthService {
+    pool: PgPool,
+    authorized_keys: Mutex<HashMap<(String, String), CachedAuthorization>>,
+    pending_usage: Mutex<HashMap<UsageKey, u64>>,
+}
+
+struct CachedAuthorization {
+    api_key_id: i64,
+    expires_at: Instant,
+}
+
+#[derive(Hash, Eq, PartialEq)]
+struct UsageKey {
+    api_key_id: i64,
+    domain: String,
+    ip: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -29,7 +52,13 @@ impl AuthState {
             .max_connections(10)
             .connect(&database_url)
             .await?;
-        Ok(Self::Enabled(pool))
+        let service = Arc::new(AuthService {
+            pool,
+            authorized_keys: Mutex::new(HashMap::new()),
+            pending_usage: Mutex::new(HashMap::new()),
+        });
+        start_usage_flusher(Arc::clone(&service));
+        Ok(Self::Enabled(service))
     }
 
     pub async fn authorize(
@@ -40,13 +69,13 @@ impl AuthState {
     ) -> Result<(), ErrorResponse> {
         match self {
             Self::Disabled => Ok(()),
-            Self::Enabled(pool) => authorize_request(pool, req, remote_addr, api_key).await,
+            Self::Enabled(service) => authorize_request(service, req, remote_addr, api_key).await,
         }
     }
 }
 
 async fn authorize_request(
-    pool: &PgPool,
+    service: &AuthService,
     req: &WebRequest<()>,
     remote_addr: SocketAddr,
     api_key: Option<&str>,
@@ -64,13 +93,39 @@ async fn authorize_request(
         message: String::from("request must include an Origin or Referer header"),
     })?;
 
+    let cache_key = (api_key.to_owned(), request_domain.clone());
+    let api_key_id = cached_api_key_id(service, &cache_key).await?;
+    queue_usage(
+        service,
+        api_key_id,
+        request_domain,
+        remote_addr.ip().to_string(),
+    );
+
+    Ok(())
+}
+
+async fn cached_api_key_id(
+    service: &AuthService,
+    cache_key: &(String, String),
+) -> Result<i64, ErrorResponse> {
+    if let Some(cached) = service
+        .authorized_keys
+        .lock()
+        .expect("authorization cache lock poisoned")
+        .get(cache_key)
+        .filter(|cached| cached.expires_at > Instant::now())
+    {
+        return Ok(cached.api_key_id);
+    }
+
     let api_key_id = sqlx::query(
         "select id
          from api_keys
          where api_key = $1 and is_active",
     )
-    .bind(api_key)
-    .fetch_optional(pool)
+    .bind(&cache_key.0)
+    .fetch_optional(&service.pool)
     .await
     .map_err(internal_error)?;
 
@@ -90,48 +145,113 @@ async fn authorize_request(
         )",
     )
     .bind(api_key_id)
-    .bind(&request_domain)
-    .fetch_one(pool)
+    .bind(&cache_key.1)
+    .fetch_one(&service.pool)
     .await
     .map_err(internal_error)?;
 
     if !allowed {
         return Err(ErrorResponse {
             error: "domain_not_allowed",
-            message: format!("API key is not allowed for domain `{request_domain}`"),
+            message: format!("API key is not allowed for domain `{}`", cache_key.1),
         });
     }
 
+    service
+        .authorized_keys
+        .lock()
+        .expect("authorization cache lock poisoned")
+        .insert(
+            cache_key.clone(),
+            CachedAuthorization {
+                api_key_id,
+                expires_at: Instant::now() + AUTH_CACHE_TTL,
+            },
+        );
+    Ok(api_key_id)
+}
+
+fn queue_usage(service: &AuthService, api_key_id: i64, domain: String, ip: String) {
+    let key = UsageKey {
+        api_key_id,
+        domain,
+        ip,
+    };
+    *service
+        .pending_usage
+        .lock()
+        .expect("usage queue lock poisoned")
+        .entry(key)
+        .or_default() += 1;
+}
+
+fn start_usage_flusher(service: Arc<AuthService>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(USAGE_FLUSH_INTERVAL);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            if let Err(error) = flush_usage(&service).await {
+                eprintln!("failed to flush API usage: {error}");
+            }
+        }
+    });
+}
+
+async fn flush_usage(service: &AuthService) -> Result<(), sqlx::Error> {
+    let pending_usage = {
+        let mut pending_usage = service
+            .pending_usage
+            .lock()
+            .expect("usage queue lock poisoned");
+        std::mem::take(&mut *pending_usage)
+    };
+
+    for (usage, count) in pending_usage {
+        if let Err(error) = flush_usage_entry(&service.pool, &usage, count).await {
+            *service
+                .pending_usage
+                .lock()
+                .expect("usage queue lock poisoned")
+                .entry(usage)
+                .or_default() += count;
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+async fn flush_usage_entry(pool: &PgPool, usage: &UsageKey, count: u64) -> Result<(), sqlx::Error> {
+    let count = i64::try_from(count).unwrap_or(i64::MAX);
+    let mut transaction = pool.begin().await?;
     sqlx::query(
         "update api_keys
-         set total_requests = total_requests + 1,
+         set total_requests = total_requests + $2,
              last_used_at = now(),
-             last_used_domain = $2,
-             last_used_ip = $3
+             last_used_domain = $3,
+             last_used_ip = $4
          where id = $1",
     )
-    .bind(api_key_id)
-    .bind(&request_domain)
-    .bind(remote_addr.ip().to_string())
-    .execute(pool)
-    .await
-    .map_err(internal_error)?;
+    .bind(usage.api_key_id)
+    .bind(count)
+    .bind(&usage.domain)
+    .bind(&usage.ip)
+    .execute(&mut *transaction)
+    .await?;
 
     sqlx::query(
         "insert into api_key_usage_daily (api_key_id, usage_date, request_domain, request_count, last_request_at)
          values ($1, current_date, $2, 1, now())
          on conflict (api_key_id, usage_date, request_domain)
-         do update
-         set request_count = api_key_usage_daily.request_count + 1,
+         do update set request_count = api_key_usage_daily.request_count + $3,
              last_request_at = excluded.last_request_at",
     )
-    .bind(api_key_id)
-    .bind(&request_domain)
-    .execute(pool)
-    .await
-    .map_err(internal_error)?;
-
-    Ok(())
+    .bind(usage.api_key_id)
+    .bind(&usage.domain)
+    .bind(count)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await
 }
 
 fn database_url_from_env() -> crate::AppResult<String> {
