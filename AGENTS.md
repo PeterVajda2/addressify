@@ -40,7 +40,9 @@ Production host: `peter@31.220.81.20`.
 
 Use `scripts/deploy_production.sh` to build locally, upload a staged binary,
 and cut over the runtime bundle. Pass `--rebuild-indexes` for indexing schema
-or search-behavior changes. That mode builds into a sibling index directory
+or search-behavior changes. Street autocomplete materializes every normalized
+street prefix as an index term, so changes to that behavior require this mode.
+It builds into a sibling index directory
 while the service stays online, then swaps directories during the short service
 restart. The source checkout is still kept on `master` for troubleshooting.
 The service may take a brief systemd restart cycle after a binary cutover; wait

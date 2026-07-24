@@ -555,14 +555,11 @@ mod tests {
         document.add_text(fields.full_address, &address.full_address);
         document.add_text(fields.search_text, &address.search_text);
         if let Some(value) = &address.thoroughfare {
-            document.add_text(
-                fields.street_search_text,
-                crate::normalize::normalize_text(value),
-            );
-            document.add_text(
-                fields.street_prefix_text,
-                crate::normalize::normalize_text(value),
-            );
+            let normalized_street = crate::normalize::normalize_text(value);
+            document.add_text(fields.street_search_text, &normalized_street);
+            for end in 1..=normalized_street.len() {
+                document.add_text(fields.street_prefix_text, &normalized_street[..end]);
+            }
         }
         document
     }

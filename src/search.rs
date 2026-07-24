@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tantivy::collector::TopDocs;
-use tantivy::query::{BooleanQuery, FuzzyTermQuery, Occur, Query, RegexQuery, TermQuery};
+use tantivy::query::{BooleanQuery, FuzzyTermQuery, Occur, Query, TermQuery};
 use tantivy::schema::{Field, IndexRecordOption, TantivyDocument, Value};
 use tantivy::{IndexReader, Searcher, Term};
 use tempfile::TempDir;
@@ -84,13 +84,12 @@ impl AddressIndex {
             return Ok(Vec::new());
         }
 
-        // Streets are stored as normalized whole values in the dedicated index.
-        // An exact prefix query is both the desired autocomplete behavior and
-        // avoids expanding common prefixes through Tantivy's fuzzy term query.
-        let query = RegexQuery::from_pattern(
-            &format!("{normalized_query}.*"),
-            self.fields.street_prefix_text,
-        )?;
+        // Every normalized street prefix is a dedicated keyword term. This is a
+        // direct postings lookup, not a fuzzy/regex expansion over common terms.
+        let query = TermQuery::new(
+            Term::from_field_text(self.fields.street_prefix_text, &normalized_query),
+            IndexRecordOption::Basic,
+        );
         let searcher = self.street_reader.searcher();
         search_tantivy_streets(&searcher, &query, self.fields, limit, limit)
     }
@@ -356,7 +355,7 @@ fn document_optional_string(document: &TantivyDocument, field: Field) -> Option<
 mod tests {
     use std::path::PathBuf;
 
-    use tantivy::schema::TantivyDocument;
+    use tantivy::schema::{Field, TantivyDocument};
     use tantivy::{Index, ReloadPolicy};
 
     use super::{AddressIndex, IndexStorage};
@@ -379,7 +378,7 @@ mod tests {
             document.add_text(fields.country_code, "SK");
             document.add_text(fields.thoroughfare, street);
             document.add_text(fields.street_search_text, normalize_text(street));
-            document.add_text(fields.street_prefix_text, normalize_text(street));
+            add_street_prefixes(&mut document, fields.street_prefix_text, street);
             document.add_text(fields.locality, locality);
             document.add_text(fields.full_address, format!("{street}, {locality}, SK"));
             document.add_text(
@@ -422,7 +421,7 @@ mod tests {
             document.add_text(fields.country_code, "SK");
             document.add_text(fields.thoroughfare, street);
             document.add_text(fields.street_search_text, normalize_text(street));
-            document.add_text(fields.street_prefix_text, normalize_text(street));
+            add_street_prefixes(&mut document, fields.street_prefix_text, street);
             document.add_text(fields.full_address, format!("{street}, SK"));
             document.add_text(fields.search_text, normalize_text(street));
             writer.add_document(document).unwrap();
@@ -460,7 +459,7 @@ mod tests {
         document.add_text(fields.country_code, "SK");
         document.add_text(fields.thoroughfare, "Na paseká");
         document.add_text(fields.street_search_text, "na paseka");
-        document.add_text(fields.street_prefix_text, "na paseka");
+        add_street_prefixes(&mut document, fields.street_prefix_text, "Na paseká");
         document.add_text(fields.full_address, "Na paseká, SK");
         document.add_text(fields.search_text, "na paseka sk");
         writer.add_document(document).unwrap();
@@ -484,5 +483,12 @@ mod tests {
         let streets = address_index.search_streets("Na paseka", 10).unwrap();
         assert_eq!(streets.len(), 1);
         assert_eq!(streets[0].formatted, "Na paseká");
+    }
+
+    fn add_street_prefixes(document: &mut TantivyDocument, field: Field, street: &str) {
+        let normalized_street = normalize_text(street);
+        for end in 1..=normalized_street.len() {
+            document.add_text(field, &normalized_street[..end]);
+        }
     }
 }
