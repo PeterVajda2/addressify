@@ -3,12 +3,13 @@
 import argparse
 import concurrent.futures
 import json
+import os
 import statistics
 import subprocess
 import sys
 import time
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 
 DEFAULT_DB_URL = "postgres://address:address@127.0.0.1:5432/address_wise"
@@ -79,6 +80,31 @@ def parse_args() -> argparse.Namespace:
         "--curl-bin",
         default=DEFAULT_CURL_BIN,
         help="Curl binary with HTTP/2 and HTTP/3 support.",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=os.environ.get("ADDRESSWISE_BENCHMARK_API_KEY"),
+        help=(
+            "API key for authenticated search requests. Defaults to the "
+            "ADDRESSWISE_BENCHMARK_API_KEY environment variable."
+        ),
+    )
+    parser.add_argument(
+        "--origin",
+        help=(
+            "Origin header for authenticated requests. Defaults to the origin "
+            "of --base-url when --api-key is set."
+        ),
+    )
+    parser.add_argument(
+        "--street-only",
+        action="store_true",
+        help="Add the bare street_only flag to each search request.",
+    )
+    parser.add_argument(
+        "--all-countries",
+        action="store_true",
+        help="Omit the country parameter and search every loaded country index.",
     )
     parser.add_argument(
         "--monitor-host",
@@ -189,17 +215,38 @@ def run_worker(
     curl_bin: str,
     limit: int,
     timeout: int,
+    api_key: str | None,
+    origin: str | None,
+    street_only: bool,
+    all_countries: bool,
 ) -> dict:
     country, query = item
     urls = [f"{base_url}/health"]
     for part in prefixes(query):
         encoded = quote(part, safe="-_.~")
-        urls.append(f"{base_url}/search?q={encoded}&country={country}&limit={limit}")
+        url = f"{base_url}/search?q={encoded}&limit={limit}"
+        if not all_countries:
+            url += f"&country={country}"
+        if api_key:
+            url += f"&api_key={quote(api_key, safe='')}"
+        if street_only:
+            url += "&street_only"
+        urls.append(url)
 
-    cmd = [curl_bin, protocol_flag, "--silent", "--show-error", "--max-time", str(timeout)]
+    cmd = [
+        curl_bin,
+        protocol_flag,
+        "--silent",
+        "--show-error",
+    ]
     for idx, url in enumerate(urls):
         if idx > 0:
             cmd.append("--next")
+        # curl's --next resets per-transfer options, including headers and --fail.
+        # Add them for every URL so a 401/403 can never be recorded as a timing.
+        cmd.extend(["--fail", "--max-time", str(timeout)])
+        if origin:
+            cmd.extend(["--header", f"Origin: {origin}"])
         cmd.extend(["--output", "/dev/null", "--write-out", "%{time_total}\n", url])
 
     started = time.perf_counter()
@@ -237,6 +284,10 @@ def run_protocol(
                     curl_bin=args.curl_bin,
                     limit=args.limit,
                     timeout=args.timeout,
+                    api_key=args.api_key,
+                    origin=args.origin,
+                    street_only=args.street_only,
+                    all_countries=args.all_countries,
                 ),
                 items,
             )
@@ -332,6 +383,11 @@ print(json.dumps(summary))
 
 def main() -> int:
     args = parse_args()
+    if args.api_key and not args.origin:
+        parsed_url = urlsplit(args.base_url)
+        if not parsed_url.scheme or not parsed_url.netloc:
+            raise RuntimeError("--base-url must include a scheme and host when using --api-key")
+        args.origin = f"{parsed_url.scheme}://{parsed_url.netloc}"
     protocols = ["http2", "http3"] if args.protocol == "both" else [args.protocol]
     items = (
         load_queries_file(args.queries_file, expected=args.sample_size)
@@ -343,6 +399,10 @@ def main() -> int:
         "base_url": args.base_url,
         "workers": args.workers,
         "sample_size": args.sample_size,
+        "authenticated": bool(args.api_key),
+        "origin": args.origin,
+        "street_only": args.street_only,
+        "all_countries": args.all_countries,
         "sample_addresses": [
             {"country": country, "query": query, "chars": len(query)}
             for country, query in items[:5]

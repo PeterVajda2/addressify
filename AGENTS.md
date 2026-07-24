@@ -11,6 +11,9 @@ authorization and usage tracking are backed by PostgreSQL.
 - `cargo test` verifies the Rust project.
 - `cargo build --release` builds `target/release/addresswise`.
 - The binary commands are `serve`, `build-indexes`, `migrate`, and `dev`.
+- `scripts/public_benchmark.py` fails on HTTP errors. Supply its API key through
+  `ADDRESSWISE_BENCHMARK_API_KEY`; use `--street-only --all-countries` to
+  reproduce the demo's autocomplete path.
 - `DEPLOY.md` documents runtime environment variables and API behavior.
 
 ## Production deployment
