@@ -22,16 +22,16 @@ esac
 
 cargo build --release
 
-next_binary="$runtime_dir/addresswise.next"
+next_binary="$runtime_dir/addresswise.next.$$.bin"
 scp target/release/addresswise "$remote_host:$next_binary"
 
-ssh "$remote_host" bash -s -- "$runtime_dir" "$source_dir" "$rebuild_indexes" <<'REMOTE_SCRIPT'
+ssh "$remote_host" bash -s -- "$runtime_dir" "$source_dir" "$rebuild_indexes" "$next_binary" <<'REMOTE_SCRIPT'
 set -euo pipefail
 
 runtime_dir="$1"
 source_dir="$2"
 rebuild_indexes="$3"
-next_binary="$runtime_dir/addresswise.next"
+next_binary="$4"
 git -C "$source_dir" pull --ff-only origin master
 
 test -x "$next_binary"
