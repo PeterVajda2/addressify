@@ -30,7 +30,7 @@ pub struct AppState {
     pub indexes: Arc<AddressIndexes>,
     pub auth: AuthState,
     pub demo_api_key: String,
-    pub admin_api_key: String,
+    pub admin_api_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -290,6 +290,12 @@ async fn admin_delete_key(
 }
 
 fn authorize_admin(state: &AppState, req: &WebRequest<()>) -> Result<(), WebResponse> {
+    let Some(configured_key) = state.admin_api_key.as_deref() else {
+        return Err(admin_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "administration is not configured; set ADMIN_API_KEY and restart the service",
+        ));
+    };
     let supplied = req
         .headers()
         .get("x-admin-key")
@@ -300,7 +306,7 @@ fn authorize_admin(state: &AppState, req: &WebRequest<()>) -> Result<(), WebResp
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| value.strip_prefix("Bearer "))
         });
-    if supplied.is_some_and(|value| value == state.admin_api_key) {
+    if supplied.is_some_and(|value| value == configured_key) {
         Ok(())
     } else {
         Err(admin_error(
@@ -638,7 +644,7 @@ mod tests {
             indexes: Arc::new(test_indexes().expect("test index")),
             auth: AuthState::Disabled,
             demo_api_key: String::from("test-key"),
-            admin_api_key: String::from("test-admin-key"),
+            admin_api_key: Some(String::from("test-admin-key")),
         });
         let service = App::new()
             .with_state(indexes)
@@ -686,7 +692,7 @@ mod tests {
             indexes: Arc::new(test_indexes().expect("test index")),
             auth: AuthState::Disabled,
             demo_api_key: String::from("test-key"),
-            admin_api_key: String::from("test-admin-key"),
+            admin_api_key: Some(String::from("test-admin-key")),
         });
         let service = App::new()
             .with_state(indexes)
@@ -721,7 +727,7 @@ mod tests {
             indexes: Arc::new(test_indexes().expect("test index")),
             auth: AuthState::Disabled,
             demo_api_key: String::from("test-key"),
-            admin_api_key: String::from("test-admin-key"),
+            admin_api_key: Some(String::from("test-admin-key")),
         });
         let service = App::new()
             .with_state(state)
@@ -750,7 +756,7 @@ mod tests {
             indexes: Arc::new(test_indexes().expect("test index")),
             auth: AuthState::Disabled,
             demo_api_key: String::from("test-key"),
-            admin_api_key: String::from("test-admin-key"),
+            admin_api_key: Some(String::from("test-admin-key")),
         });
         let service = App::new()
             .with_state(indexes)
@@ -791,7 +797,7 @@ mod tests {
             indexes: Arc::new(test_indexes().expect("test index")),
             auth: AuthState::Disabled,
             demo_api_key: String::from("test-key"),
-            admin_api_key: String::from("test-admin-key"),
+            admin_api_key: Some(String::from("test-admin-key")),
         });
         let service = App::new()
             .with_state(state)

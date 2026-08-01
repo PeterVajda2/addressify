@@ -179,14 +179,10 @@ fn demo_api_key_from_env() -> AppResult<String> {
     env::var("DEMO_API_KEY").map_err(|_| "DEMO_API_KEY is required to serve the demo".into())
 }
 
-fn admin_api_key_from_env() -> AppResult<String> {
-    let value = env::var("ADMIN_API_KEY")
-        .map_err(|_| "ADMIN_API_KEY is required to serve the admin interface")?;
-    if value.trim().is_empty() {
-        Err("ADMIN_API_KEY is required to serve the admin interface".into())
-    } else {
-        Ok(value)
-    }
+fn admin_api_key_from_env() -> AppResult<Option<String>> {
+    Ok(env::var("ADMIN_API_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty()))
 }
 
 async fn migrate_command() -> AppResult<()> {

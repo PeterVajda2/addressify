@@ -110,11 +110,13 @@ Usage is tracked in:
 ## API key administration
 
 `/admin` is a browser interface for managing API keys, labels, allowed domains,
-activation status, and usage data. It requires `ADMIN_API_KEY` in the runtime
-environment. The page stores this key only in the browser's session storage and
-sends it in the `X-Admin-Key` header to the administrative API. Generate a
-long, private value and keep it in `/etc/addresswise.env`; never use a public
-autocomplete API key for this setting.
+activation status, and usage data. Set `ADMIN_API_KEY` in the runtime
+environment to enable it. Without that setting, the public API remains online
+but administrative requests return a configuration error. The page stores this
+key only in the browser's session storage and sends it in the `X-Admin-Key`
+header to the administrative API. Generate a long, private value and keep it
+in `/etc/addresswise.env`; never use a public autocomplete API key for this
+setting.
 
 ## HTTP/3
 
