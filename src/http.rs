@@ -100,7 +100,6 @@ pub fn serve_with_state(addr: String, state: Arc<AppState>) -> AppResult<()> {
 
     App::new()
         .with_state(state)
-        .at("/", get(handler_service(home)))
         .at("/admin", get(handler_service(admin_home)))
         .at("/admin/api/keys", get(handler_service(admin_list_keys)))
         .at(
@@ -118,6 +117,7 @@ pub fn serve_with_state(addr: String, state: Arc<AppState>) -> AppResult<()> {
         .at("/health", get(handler_service(health)))
         .at("/search", get(handler_service(search)))
         .at("/suggest", get(handler_service(search)))
+        .at("/", get(handler_service(home)))
         .serve()
         .worker_threads(workers)
         .worker_max_blocking_threads(BLOCKING_THREADS_PER_WORKER)
@@ -796,6 +796,7 @@ mod tests {
         let service = App::new()
             .with_state(state)
             .at("/admin", get(handler_service(admin_home)))
+            .at("/", get(handler_service(home)))
             .finish()
             .call(())
             .await
