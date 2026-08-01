@@ -424,7 +424,8 @@
 
       event.stopPropagation();
 
-      if (latestResultsAreStreetOnly) {
+      const hasHouseNumber = Boolean(buildHouseNumber(result.address));
+      if (latestResultsAreStreetOnly && !hasHouseNumber) {
         selectedStreet = result.address.thoroughfare || result.formatted;
         streetInput.value = `${selectedStreet} `;
         clearStructuredFields();

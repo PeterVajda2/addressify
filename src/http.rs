@@ -789,6 +789,7 @@ mod tests {
         assert!(body.contains("focusStreetInputAtEnd"));
         assert!(body.contains("`${selectedStreet} `"));
         assert!(body.contains("fillStructuredFields(result)"));
+        assert!(body.contains("latestResultsAreStreetOnly && !hasHouseNumber"));
     }
 
     #[tokio::test]
