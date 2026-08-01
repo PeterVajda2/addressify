@@ -1,21 +1,24 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
 use quinn::crypto::rustls::QuicServerConfig;
+use rand::RngCore;
 use rcgen::generate_simple_self_signed;
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use xitca_web::{
     App,
     handler::{handler_service, html::Html, json::Json, query::Query, state::StateRef},
     http::{StatusCode, WebRequest, WebResponse, header::CONTENT_TYPE},
-    route::get,
+    route::{get, post},
 };
 
 use crate::AppResult;
-use crate::auth::{AuthState, ErrorResponse, error_status};
+use crate::auth::{AuthState, ErrorResponse, error_status, normalize_domain};
 use crate::models::SearchResult;
 use crate::search::{AddressIndexes, search_indexes_async};
 
@@ -27,6 +30,7 @@ pub struct AppState {
     pub indexes: Arc<AddressIndexes>,
     pub auth: AuthState,
     pub demo_api_key: String,
+    pub admin_api_key: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +56,40 @@ struct HealthResponse {
     countries: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct AdminApiKey {
+    id: i64,
+    api_key: String,
+    label: Option<String>,
+    domains: Vec<String>,
+    is_active: bool,
+    total_requests: i64,
+    last_used_at: Option<String>,
+    last_used_domain: Option<String>,
+    last_used_ip: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateApiKeyRequest {
+    label: Option<String>,
+    domains: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateApiKeyRequest {
+    id: i64,
+    label: Option<String>,
+    domains: Vec<String>,
+    is_active: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteApiKeyRequest {
+    id: i64,
+}
+
 pub fn serve_with_state(addr: String, state: Arc<AppState>) -> AppResult<()> {
     let workers = std::thread::available_parallelism()
         .map(usize::from)
@@ -63,6 +101,20 @@ pub fn serve_with_state(addr: String, state: Arc<AppState>) -> AppResult<()> {
     App::new()
         .with_state(state)
         .at("/", get(handler_service(home)))
+        .at("/admin", get(handler_service(admin_home)))
+        .at("/admin/api/keys", get(handler_service(admin_list_keys)))
+        .at(
+            "/admin/api/keys/create",
+            post(handler_service(admin_create_key)),
+        )
+        .at(
+            "/admin/api/keys/update",
+            post(handler_service(admin_update_key)),
+        )
+        .at(
+            "/admin/api/keys/delete",
+            post(handler_service(admin_delete_key)),
+        )
         .at("/health", get(handler_service(health)))
         .at("/search", get(handler_service(search)))
         .at("/suggest", get(handler_service(search)))
@@ -82,6 +134,324 @@ async fn home(StateRef(state): StateRef<'_, Arc<AppState>>) -> Html<String> {
     let demo_api_key = serde_json::to_string(&state.demo_api_key)
         .expect("serializing a demo API key must succeed");
     Html(include_str!("../static/index.html").replace("__DEMO_API_KEY__", &demo_api_key))
+}
+
+async fn admin_home() -> Html<&'static str> {
+    Html(include_str!("../static/admin.html"))
+}
+
+async fn admin_list_keys(
+    StateRef(state): StateRef<'_, Arc<AppState>>,
+    req: &WebRequest<()>,
+) -> WebResponse {
+    if let Err(response) = authorize_admin(&state, req) {
+        return response;
+    }
+    match list_admin_keys(&state.auth).await {
+        Ok(keys) => json_ok(keys),
+        Err(error) => admin_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+async fn admin_create_key(
+    StateRef(state): StateRef<'_, Arc<AppState>>,
+    Json(request): Json<CreateApiKeyRequest>,
+    req: &WebRequest<()>,
+) -> WebResponse {
+    if let Err(response) = authorize_admin(&state, req) {
+        return response;
+    }
+    let domains = match normalize_domains(request.domains) {
+        Ok(domains) => domains,
+        Err(error) => return admin_error(StatusCode::BAD_REQUEST, error),
+    };
+    let label = match normalize_label(request.label) {
+        Ok(label) => label,
+        Err(error) => return admin_error(StatusCode::BAD_REQUEST, error),
+    };
+    let Some(pool) = state.auth.pool() else {
+        return admin_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database-backed authentication is disabled",
+        );
+    };
+
+    let api_key = generate_api_key();
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return database_error(error),
+    };
+    let id = match sqlx::query_scalar::<_, i64>(
+        "insert into api_keys (api_key, label) values ($1, $2) returning id",
+    )
+    .bind(&api_key)
+    .bind(&label)
+    .fetch_one(&mut *transaction)
+    .await
+    {
+        Ok(id) => id,
+        Err(error) => return database_error(error),
+    };
+    if let Err(error) = replace_domains(&mut transaction, id, &domains).await {
+        return database_error(error);
+    }
+    if let Err(error) = transaction.commit().await {
+        return database_error(error);
+    }
+    state.auth.clear_authorization_cache();
+    match admin_key_by_id(&state.auth, id).await {
+        Ok(key) => json_response(StatusCode::CREATED, &key),
+        Err(error) => admin_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+async fn admin_update_key(
+    StateRef(state): StateRef<'_, Arc<AppState>>,
+    Json(request): Json<UpdateApiKeyRequest>,
+    req: &WebRequest<()>,
+) -> WebResponse {
+    if let Err(response) = authorize_admin(&state, req) {
+        return response;
+    }
+    let domains = match normalize_domains(request.domains) {
+        Ok(domains) => domains,
+        Err(error) => return admin_error(StatusCode::BAD_REQUEST, error),
+    };
+    let label = match normalize_label(request.label) {
+        Ok(label) => label,
+        Err(error) => return admin_error(StatusCode::BAD_REQUEST, error),
+    };
+    let Some(pool) = state.auth.pool() else {
+        return admin_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database-backed authentication is disabled",
+        );
+    };
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return database_error(error),
+    };
+    let result = match sqlx::query(
+        "update api_keys set label = $2, is_active = $3, updated_at = now() where id = $1",
+    )
+    .bind(request.id)
+    .bind(&label)
+    .bind(request.is_active)
+    .execute(&mut *transaction)
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => return database_error(error),
+    };
+    if result.rows_affected() == 0 {
+        return admin_error(StatusCode::NOT_FOUND, "API key was not found");
+    }
+    if let Err(error) = replace_domains(&mut transaction, request.id, &domains).await {
+        return database_error(error);
+    }
+    if let Err(error) = transaction.commit().await {
+        return database_error(error);
+    }
+    state.auth.clear_authorization_cache();
+    match admin_key_by_id(&state.auth, request.id).await {
+        Ok(key) => json_ok(key),
+        Err(error) => admin_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+async fn admin_delete_key(
+    StateRef(state): StateRef<'_, Arc<AppState>>,
+    Json(request): Json<DeleteApiKeyRequest>,
+    req: &WebRequest<()>,
+) -> WebResponse {
+    if let Err(response) = authorize_admin(&state, req) {
+        return response;
+    }
+    let Some(pool) = state.auth.pool() else {
+        return admin_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database-backed authentication is disabled",
+        );
+    };
+    match sqlx::query("delete from api_keys where id = $1")
+        .bind(request.id)
+        .execute(pool)
+        .await
+    {
+        Ok(result) if result.rows_affected() == 0 => {
+            admin_error(StatusCode::NOT_FOUND, "API key was not found")
+        }
+        Ok(_) => {
+            state.auth.clear_authorization_cache();
+            json_ok(serde_json::json!({ "deleted": true }))
+        }
+        Err(error) => database_error(error),
+    }
+}
+
+fn authorize_admin(state: &AppState, req: &WebRequest<()>) -> Result<(), WebResponse> {
+    let supplied = req
+        .headers()
+        .get("x-admin-key")
+        .and_then(|value| value.to_str().ok())
+        .or_else(|| {
+            req.headers()
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "))
+        });
+    if supplied.is_some_and(|value| value == state.admin_api_key) {
+        Ok(())
+    } else {
+        Err(admin_error(
+            StatusCode::UNAUTHORIZED,
+            "a valid admin key is required",
+        ))
+    }
+}
+
+async fn list_admin_keys(auth: &AuthState) -> Result<Vec<AdminApiKey>, String> {
+    let pool = auth
+        .pool()
+        .ok_or_else(|| String::from("database-backed authentication is disabled"))?;
+    let rows = sqlx::query(
+        "select id, api_key, label, is_active, total_requests,
+                to_char(last_used_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as last_used_at,
+                last_used_domain, last_used_ip,
+                to_char(created_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as created_at,
+                to_char(updated_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as updated_at
+         from api_keys order by created_at desc, id desc",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|error| format!("database operation failed: {error}"))?;
+    let mut keys = Vec::with_capacity(rows.len());
+    for row in rows {
+        keys.push(admin_key_from_row(auth, row).await?);
+    }
+    Ok(keys)
+}
+
+async fn admin_key_by_id(auth: &AuthState, id: i64) -> Result<AdminApiKey, String> {
+    let pool = auth
+        .pool()
+        .ok_or_else(|| String::from("database-backed authentication is disabled"))?;
+    let row = sqlx::query(
+        "select id, api_key, label, is_active, total_requests,
+                to_char(last_used_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as last_used_at,
+                last_used_domain, last_used_ip,
+                to_char(created_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as created_at,
+                to_char(updated_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as updated_at
+         from api_keys where id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| format!("database operation failed: {error}"))?
+    .ok_or_else(|| String::from("API key was not found"))?;
+    admin_key_from_row(auth, row).await
+}
+
+async fn admin_key_from_row(
+    auth: &AuthState,
+    row: sqlx::postgres::PgRow,
+) -> Result<AdminApiKey, String> {
+    let pool = auth
+        .pool()
+        .ok_or_else(|| String::from("database-backed authentication is disabled"))?;
+    let id: i64 = row.get("id");
+    let domains = sqlx::query_scalar::<_, String>(
+        "select domain from api_key_domains where api_key_id = $1 order by domain",
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| format!("database operation failed: {error}"))?;
+    Ok(AdminApiKey {
+        id,
+        api_key: row.get("api_key"),
+        label: row.get("label"),
+        domains,
+        is_active: row.get("is_active"),
+        total_requests: row.get("total_requests"),
+        last_used_at: row.get("last_used_at"),
+        last_used_domain: row.get("last_used_domain"),
+        last_used_ip: row.get("last_used_ip"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+async fn replace_domains(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    api_key_id: i64,
+    domains: &[String],
+) -> Result<(), sqlx::Error> {
+    sqlx::query("delete from api_key_domains where api_key_id = $1")
+        .bind(api_key_id)
+        .execute(&mut **transaction)
+        .await?;
+    for domain in domains {
+        sqlx::query("insert into api_key_domains (api_key_id, domain) values ($1, $2)")
+            .bind(api_key_id)
+            .bind(domain)
+            .execute(&mut **transaction)
+            .await?;
+    }
+    Ok(())
+}
+
+fn normalize_domains(domains: Vec<String>) -> Result<Vec<String>, &'static str> {
+    let domains = domains
+        .into_iter()
+        .map(|domain| normalize_domain(&domain).ok_or("each allowed domain must be non-empty"))
+        .collect::<Result<BTreeSet<_>, _>>()?
+        .into_iter()
+        .collect::<Vec<_>>();
+    if domains.is_empty() {
+        Err("at least one allowed domain is required")
+    } else {
+        Ok(domains)
+    }
+}
+
+fn normalize_label(label: Option<String>) -> Result<Option<String>, &'static str> {
+    let label = label.and_then(|label| {
+        let trimmed = label.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    });
+    if label.as_ref().is_some_and(|label| label.len() > 200) {
+        Err("label must be at most 200 characters")
+    } else {
+        Ok(label)
+    }
+}
+
+fn generate_api_key() -> String {
+    let mut bytes = [0_u8; 24];
+    rand::rng().fill_bytes(&mut bytes);
+    let token = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("aw_live_{token}")
+}
+
+fn admin_error(status: StatusCode, message: impl Into<String>) -> WebResponse {
+    json_error(
+        status,
+        ErrorResponse {
+            error: "admin_error",
+            message: message.into(),
+        },
+    )
+}
+
+fn database_error(error: sqlx::Error) -> WebResponse {
+    admin_error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("database operation failed: {error}"),
+    )
 }
 
 async fn health(StateRef(state): StateRef<'_, Arc<AppState>>) -> Json<HealthResponse> {
@@ -227,7 +597,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{AppState, health, home, is_street_only, normalize_country, search};
+    use super::{AppState, admin_home, health, home, is_street_only, normalize_country, search};
     use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::Arc;
@@ -268,6 +638,7 @@ mod tests {
             indexes: Arc::new(test_indexes().expect("test index")),
             auth: AuthState::Disabled,
             demo_api_key: String::from("test-key"),
+            admin_api_key: String::from("test-admin-key"),
         });
         let service = App::new()
             .with_state(indexes)
@@ -315,6 +686,7 @@ mod tests {
             indexes: Arc::new(test_indexes().expect("test index")),
             auth: AuthState::Disabled,
             demo_api_key: String::from("test-key"),
+            admin_api_key: String::from("test-admin-key"),
         });
         let service = App::new()
             .with_state(indexes)
@@ -349,6 +721,7 @@ mod tests {
             indexes: Arc::new(test_indexes().expect("test index")),
             auth: AuthState::Disabled,
             demo_api_key: String::from("test-key"),
+            admin_api_key: String::from("test-admin-key"),
         });
         let service = App::new()
             .with_state(state)
@@ -377,6 +750,7 @@ mod tests {
             indexes: Arc::new(test_indexes().expect("test index")),
             auth: AuthState::Disabled,
             demo_api_key: String::from("test-key"),
+            admin_api_key: String::from("test-admin-key"),
         });
         let service = App::new()
             .with_state(indexes)
@@ -409,6 +783,33 @@ mod tests {
         assert!(body.contains("focusStreetInputAtEnd"));
         assert!(body.contains("`${selectedStreet} `"));
         assert!(body.contains("fillStructuredFields(result)"));
+    }
+
+    #[tokio::test]
+    async fn admin_page_is_available_without_exposing_key_data() {
+        let state = Arc::new(AppState {
+            indexes: Arc::new(test_indexes().expect("test index")),
+            auth: AuthState::Disabled,
+            demo_api_key: String::from("test-key"),
+            admin_api_key: String::from("test-admin-key"),
+        });
+        let service = App::new()
+            .with_state(state)
+            .at("/admin", get(handler_service(admin_home)))
+            .finish()
+            .call(())
+            .await
+            .expect("app service");
+
+        let mut req = WebRequest::default();
+        *req.uri_mut() = Uri::from_static("/admin");
+        let body = collect_string_body(service.call(req).await.expect("response").into_body())
+            .await
+            .expect("body");
+
+        assert!(body.contains("API key administration"));
+        assert!(body.contains("X-Admin-Key"));
+        assert!(!body.contains("test-admin-key"));
     }
 
     fn test_indexes() -> tantivy::Result<AddressIndexes> {

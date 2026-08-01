@@ -125,6 +125,7 @@ async fn serve_command(
     let address_indexes = load_indices_from_dir(country_codes, &index_dir)?;
     let auth = AuthState::from_env_required().await?;
     let demo_api_key = demo_api_key_from_env()?;
+    let admin_api_key = admin_api_key_from_env()?;
 
     println!(
         "Loaded {} country index(es) from {} in {:.2?}.",
@@ -141,6 +142,7 @@ async fn serve_command(
             indexes: Arc::new(address_indexes),
             auth,
             demo_api_key,
+            admin_api_key,
         }),
     )
 }
@@ -150,6 +152,7 @@ async fn dev_command(country_codes: &[String], host: String, port: u16) -> AppRe
     let (address_indexes, indexed_counts) = build_indices_from_postgres(country_codes)?;
     let auth = AuthState::from_env_required().await?;
     let demo_api_key = demo_api_key_from_env()?;
+    let admin_api_key = admin_api_key_from_env()?;
 
     for (country_code, indexed_count) in indexed_counts {
         println!("Indexed {indexed_count} active {country_code} addresses.");
@@ -167,12 +170,23 @@ async fn dev_command(country_codes: &[String], host: String, port: u16) -> AppRe
             indexes: Arc::new(address_indexes),
             auth,
             demo_api_key,
+            admin_api_key,
         }),
     )
 }
 
 fn demo_api_key_from_env() -> AppResult<String> {
     env::var("DEMO_API_KEY").map_err(|_| "DEMO_API_KEY is required to serve the demo".into())
+}
+
+fn admin_api_key_from_env() -> AppResult<String> {
+    let value = env::var("ADMIN_API_KEY")
+        .map_err(|_| "ADMIN_API_KEY is required to serve the admin interface")?;
+    if value.trim().is_empty() {
+        Err("ADMIN_API_KEY is required to serve the admin interface".into())
+    } else {
+        Ok(value)
+    }
 }
 
 async fn migrate_command() -> AppResult<()> {

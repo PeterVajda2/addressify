@@ -35,6 +35,8 @@ Production host: `peter@31.220.81.20`.
 - Runtime indexes live at `/home/peter/addresswise-deploy/data/indexes`.
 - Runtime secrets, including `DATABASE_URL`, are in `/etc/addresswise.env` and
   must never be printed or committed.
+- `ADMIN_API_KEY` is also required at runtime. It protects `/admin` and its API
+  key-management endpoints; keep it only in `/etc/addresswise.env`.
 - Production has no usable `cargo` in its non-interactive shell. Build release
   binaries locally; do not rely on remote compilation.
 

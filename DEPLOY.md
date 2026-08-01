@@ -77,6 +77,7 @@ Local all-in-one development mode:
 ```bash
 COUNTRY_CODES=CZ,SK \
 DATABASE_URL=postgres://address:password@127.0.0.1:5432/address_wise \
+ADMIN_API_KEY=replace-with-a-long-private-admin-key \
 ./target/release/addresswise dev
 ```
 
@@ -105,6 +106,15 @@ Usage is tracked in:
 
 - `api_keys.total_requests`
 - `api_key_usage_daily`
+
+## API key administration
+
+`/admin` is a browser interface for managing API keys, labels, allowed domains,
+activation status, and usage data. It requires `ADMIN_API_KEY` in the runtime
+environment. The page stores this key only in the browser's session storage and
+sends it in the `X-Admin-Key` header to the administrative API. Generate a
+long, private value and keep it in `/etc/addresswise.env`; never use a public
+autocomplete API key for this setting.
 
 ## HTTP/3
 

@@ -72,6 +72,24 @@ impl AuthState {
             Self::Enabled(service) => authorize_request(service, req, remote_addr, api_key).await,
         }
     }
+
+    /// Discard cached authorizations after an administrator changes a key or its domains.
+    pub fn clear_authorization_cache(&self) {
+        if let Self::Enabled(service) = self {
+            service
+                .authorized_keys
+                .lock()
+                .expect("authorization cache lock poisoned")
+                .clear();
+        }
+    }
+
+    pub(crate) fn pool(&self) -> Option<&PgPool> {
+        match self {
+            Self::Disabled => None,
+            Self::Enabled(service) => Some(&service.pool),
+        }
+    }
 }
 
 async fn authorize_request(

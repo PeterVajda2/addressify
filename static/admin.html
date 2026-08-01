@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>addresswise — API key admin</title>
+  <style>
+    :root { color-scheme: light; --ink:#151515; --muted:#626262; --line:#d8d8d8; --panel:#fff; --bg:#f4f4f2; --danger:#9d2020; }
+    * { box-sizing: border-box; } body { margin:0; padding:2rem; color:var(--ink); background:var(--bg); font:16px/1.45 system-ui,sans-serif; }
+    main { max-width:72rem; margin:auto; } h1 { margin:0; font:700 2rem/1 Georgia,serif; } .intro { color:var(--muted); margin:.35rem 0 1.5rem; }
+    .toolbar, .key-head, .actions { display:flex; gap:.7rem; align-items:center; flex-wrap:wrap; } .toolbar { margin-bottom:1.25rem; }
+    button { border:1px solid var(--ink); background:var(--ink); color:#fff; padding:.55rem .8rem; font:inherit; cursor:pointer; } button.secondary { background:#fff; color:var(--ink); border-color:var(--line); } button.danger { color:var(--danger); border-color:#e4baba; background:#fff; }
+    input, textarea { width:100%; border:1px solid #aaa; padding:.55rem; font:inherit; } textarea { min-height:4.25rem; resize:vertical; } label { display:grid; gap:.3rem; font-size:.85rem; font-weight:650; }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.8rem; } .full { grid-column:1/-1; }
+    .key { background:var(--panel); border:1px solid var(--line); padding:1rem; margin:.8rem 0; } .key-head { justify-content:space-between; } .key h2 { margin:0; font-size:1.1rem; } .meta { color:var(--muted); font-size:.88rem; margin:.45rem 0 1rem; }
+    code { overflow-wrap:anywhere; background:#f3f3f3; padding:.15rem .3rem; } .status { margin-left:auto; padding:.15rem .45rem; font-size:.78rem; font-weight:700; text-transform:uppercase; background:#e5f2e6; } .status.off { background:#f4dddd; color:var(--danger); }
+    dialog { width:min(38rem, calc(100% - 2rem)); border:1px solid var(--line); padding:1.2rem; } dialog::backdrop { background:rgba(0,0,0,.35); } dialog h2 { margin-top:0; } .message { min-height:1.4rem; color:var(--danger); } .notice { border:1px solid #9bc69f; background:#f1faf1; padding:.75rem; margin-bottom:1rem; } .hidden { display:none; }
+    @media (max-width: 600px) { body { padding:1rem; } .grid { grid-template-columns:1fr; } .full { grid-column:auto; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>API key administration</h1>
+    <p class="intro">Create, restrict, suspend, and remove API keys. Changes apply immediately.</p>
+    <div class="toolbar"><button id="login">Set admin key</button><button id="new-key">Create API key</button><button class="secondary" id="reload">Reload</button></div>
+    <p id="message" class="message" role="status"></p>
+    <section id="keys" aria-live="polite"></section>
+  </main>
+  <dialog id="editor">
+    <form id="key-form">
+      <h2 id="editor-title">Create API key</h2>
+      <input id="key-id" type="hidden">
+      <div class="grid">
+        <label class="full">Label <input id="label" maxlength="200" placeholder="Customer or site name"></label>
+        <label class="full">Allowed domains <textarea id="domains" required placeholder="example.com&#10;www.example.com"></textarea></label>
+        <label id="active-label" class="full"><span><input id="active" type="checkbox" checked> Key is active</span></label>
+      </div>
+      <p id="form-message" class="message"></p>
+      <div class="actions"><button type="submit">Save</button><button class="secondary" type="button" id="cancel">Cancel</button></div>
+    </form>
+  </dialog>
+  <script>
+    const keyStorage = "addresswise-admin-key";
+    const byId = id => document.getElementById(id);
+    const message = byId("message"), keys = byId("keys"), editor = byId("editor"), formMessage = byId("form-message");
+    let apiKeys = [];
+    function adminKey() { return sessionStorage.getItem(keyStorage) || ""; }
+    async function api(path, options = {}) {
+      const response = await fetch(path, { ...options, headers: { "X-Admin-Key": adminKey(), "Content-Type": "application/json", ...(options.headers || {}) } });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.message || `Request failed (${response.status})`);
+      return body;
+    }
+    function text(value) { return value == null || value === "" ? "—" : String(value); }
+    function render() {
+      keys.replaceChildren(...apiKeys.map(key => {
+        const item = document.createElement("article"); item.className = "key";
+        item.innerHTML = `<div class="key-head"><h2>${escapeHtml(key.label || "Unlabelled key")}</h2><span class="status ${key.is_active ? "" : "off"}">${key.is_active ? "active" : "disabled"}</span></div>
+          <p><code>${escapeHtml(key.api_key)}</code></p><p class="meta">${key.total_requests.toLocaleString()} requests · created ${text(key.created_at)} · last used ${text(key.last_used_at)}${key.last_used_domain ? ` from ${escapeHtml(key.last_used_domain)}` : ""}</p>
+          <div class="actions"><button class="secondary">Edit</button><button class="danger">Delete</button></div>`;
+        item.querySelector(".secondary").onclick = () => openEditor(key);
+        item.querySelector(".danger").onclick = () => deleteKey(key);
+        return item;
+      }));
+      if (!apiKeys.length) keys.innerHTML = "<p>No API keys have been created.</p>";
+    }
+    function escapeHtml(value) { const node = document.createElement("span"); node.textContent = value; return node.innerHTML; }
+    async function load() {
+      message.textContent = "";
+      try { apiKeys = await api("/admin/api/keys"); render(); }
+      catch (error) { message.textContent = error.message; }
+    }
+    function openEditor(key) {
+      byId("editor-title").textContent = key ? "Edit API key" : "Create API key";
+      byId("key-id").value = key?.id || ""; byId("label").value = key?.label || ""; byId("domains").value = key?.domains.join("\n") || "";
+      byId("active").checked = key?.is_active ?? true; byId("active-label").classList.toggle("hidden", !key); formMessage.textContent = ""; editor.showModal();
+    }
+    async function deleteKey(key) {
+      if (!confirm(`Delete ${key.label || key.api_key}? This cannot be undone.`)) return;
+      try { await api("/admin/api/keys/delete", { method:"POST", body:JSON.stringify({id:key.id}) }); await load(); }
+      catch (error) { message.textContent = error.message; }
+    }
+    byId("login").onclick = () => { const value = prompt("Admin key", adminKey()); if (value !== null) { sessionStorage.setItem(keyStorage, value.trim()); load(); } };
+    byId("new-key").onclick = () => openEditor(); byId("reload").onclick = load; byId("cancel").onclick = () => editor.close();
+    byId("key-form").onsubmit = async event => { event.preventDefault(); formMessage.textContent = ""; const id = byId("key-id").value;
+      const payload = { label:byId("label").value, domains:byId("domains").value.split(/[\n,]/).map(x => x.trim()).filter(Boolean), is_active:byId("active").checked };
+      try { await api(id ? "/admin/api/keys/update" : "/admin/api/keys/create", { method:"POST", body:JSON.stringify(id ? {...payload, id:Number(id)} : payload) }); editor.close(); await load(); }
+      catch (error) { formMessage.textContent = error.message; }
+    };
+    load();
+  </script>
+</body>
+</html>
