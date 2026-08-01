@@ -5,7 +5,7 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use addresswise::address_rules::{
-    clean_thoroughfare, format_display_address, normalize_address_parts,
+    DisplayAddressParts, clean_thoroughfare, format_display_address, normalize_address_parts,
 };
 use addresswise::normalize::normalize_text;
 use anyhow::{Context, Result, bail};
@@ -73,7 +73,11 @@ async fn main() -> Result<()> {
             .database_url
             .as_deref()
             .context("database URL missing; pass --database-url or set DATABASE_URL")?;
-        Some(PgPool::connect(db_url).await.context("failed to connect to PostgreSQL")?)
+        Some(
+            PgPool::connect(db_url)
+                .await
+                .context("failed to connect to PostgreSQL")?,
+        )
     };
 
     if opts.truncate {
@@ -101,7 +105,9 @@ async fn main() -> Result<()> {
         &settlements,
     )?);
 
-    if let Some(limit) = opts.limit && all_rows.len() > limit {
+    if let Some(limit) = opts.limit
+        && all_rows.len() > limit
+    {
         all_rows.truncate(limit);
     }
 
@@ -130,11 +136,12 @@ async fn main() -> Result<()> {
         totals.rows_deduped += deduped;
     }
 
-    if !opts.dry_run && opts.limit.is_none() {
-        if let Some(pool) = pool.as_ref() {
-            for source_dataset in &datasets_seen {
-                deactivate_missing_rows(pool, source_dataset, run_marker).await?;
-            }
+    if !opts.dry_run
+        && opts.limit.is_none()
+        && let Some(pool) = pool.as_ref()
+    {
+        for source_dataset in &datasets_seen {
+            deactivate_missing_rows(pool, source_dataset, run_marker).await?;
         }
     }
 
@@ -157,12 +164,14 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn load_settlements(workbook: &mut Sheets<BufReader<File>>) -> Result<HashMap<String, Vec<Settlement>>> {
+fn load_settlements(
+    workbook: &mut Sheets<BufReader<File>>,
+) -> Result<HashMap<String, Vec<Settlement>>> {
     let range = read_sheet(workbook, "Települések")?;
     let mut by_postal: HashMap<String, Vec<Settlement>> = HashMap::new();
 
     for row in range.rows().skip(1) {
-        let postal_code = clean_postal_code(row.get(0).map(cell_to_string));
+        let postal_code = clean_postal_code(row.first().map(cell_to_string));
         let locality = to_opt_string(row.get(1).map(cell_to_string));
         let dependent_locality = to_opt_string(row.get(2).map(cell_to_string));
         let (Some(postal_code), Some(locality)) = (postal_code, locality) else {
@@ -191,16 +200,16 @@ fn build_settlement_rows(
     let mut rows = Vec::new();
     for (postal_code, options) in settlements {
         for settlement in options {
-            let full_address = format_display_address(
-                "HU",
-                None,
-                None,
-                None,
-                Some(settlement.locality.as_str()),
-                settlement.dependent_locality.as_deref(),
-                None,
-                Some(postal_code.as_str()),
-            );
+            let full_address = format_display_address(DisplayAddressParts {
+                country_code: "HU",
+                thoroughfare: None,
+                house_number: None,
+                unit: None,
+                locality: Some(settlement.locality.as_str()),
+                dependent_locality: settlement.dependent_locality.as_deref(),
+                admin_area: None,
+                postal_code: Some(postal_code.as_str()),
+            });
             if full_address.is_empty() {
                 continue;
             }
@@ -262,7 +271,7 @@ fn build_street_rows(
         let source_dataset = format!("{base_name}#{sheet_name}");
 
         for row in range.rows().skip(1) {
-            let postal_code = clean_postal_code(row.get(0).map(cell_to_string));
+            let postal_code = clean_postal_code(row.first().map(cell_to_string));
             let street_name = to_opt_string(row.get(1).map(cell_to_string));
             let street_type = to_opt_string(row.get(2).map(cell_to_string));
             let row_district = to_opt_string(row.get(3).map(cell_to_string));
@@ -297,16 +306,16 @@ fn build_street_rows(
                 .or_else(|| resolve_dependent_locality(settlements.get(&postal_code), &locality));
             let admin_area = ker.clone();
 
-            let full_address = format_display_address(
-                "HU",
-                thoroughfare.as_deref(),
-                premise.as_deref(),
-                unit.as_deref(),
-                Some(locality.as_str()),
-                dependent_locality.as_deref(),
-                admin_area.as_deref(),
-                Some(postal_code.as_str()),
-            );
+            let full_address = format_display_address(DisplayAddressParts {
+                country_code: "HU",
+                thoroughfare: thoroughfare.as_deref(),
+                house_number: premise.as_deref(),
+                unit: unit.as_deref(),
+                locality: Some(locality.as_str()),
+                dependent_locality: dependent_locality.as_deref(),
+                admin_area: admin_area.as_deref(),
+                postal_code: Some(postal_code.as_str()),
+            });
             if full_address.is_empty() {
                 continue;
             }
@@ -403,7 +412,11 @@ fn render_house_spec(
     }
 }
 
-async fn flush_batch(pool: Option<&PgPool>, rows: &mut Vec<AddressRow>, dry_run: bool) -> Result<(usize, usize)> {
+async fn flush_batch(
+    pool: Option<&PgPool>,
+    rows: &mut Vec<AddressRow>,
+    dry_run: bool,
+) -> Result<(usize, usize)> {
     if rows.is_empty() {
         return Ok((0, 0));
     }
@@ -482,11 +495,19 @@ async fn insert_batch(pool: &PgPool, rows: &[AddressRow]) -> Result<usize> {
             last_seen_run = EXCLUDED.last_seen_run,\
             is_active = TRUE",
     );
-    let result = qb.build().execute(pool).await.context("failed bulk insert")?;
+    let result = qb
+        .build()
+        .execute(pool)
+        .await
+        .context("failed bulk insert")?;
     Ok(result.rows_affected() as usize)
 }
 
-async fn deactivate_missing_rows(pool: &PgPool, source_dataset: &str, run_marker: i64) -> Result<()> {
+async fn deactivate_missing_rows(
+    pool: &PgPool,
+    source_dataset: &str,
+    run_marker: i64,
+) -> Result<()> {
     sqlx::query(
         r#"
         UPDATE addresses
@@ -516,14 +537,22 @@ fn parse_args() -> Result<Options> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--input" => input = PathBuf::from(args.next().context("missing value for --input")?),
-            "--database-url" => database_url = Some(args.next().context("missing value for --database-url")?),
+            "--database-url" => {
+                database_url = Some(args.next().context("missing value for --database-url")?)
+            }
             "--batch-size" => {
                 let value = args.next().context("missing value for --batch-size")?;
-                batch_size = value.parse::<usize>().with_context(|| format!("invalid --batch-size: {value}"))?;
+                batch_size = value
+                    .parse::<usize>()
+                    .with_context(|| format!("invalid --batch-size: {value}"))?;
             }
             "--limit" => {
                 let value = args.next().context("missing value for --limit")?;
-                limit = Some(value.parse::<usize>().with_context(|| format!("invalid --limit: {value}"))?);
+                limit = Some(
+                    value
+                        .parse::<usize>()
+                        .with_context(|| format!("invalid --limit: {value}"))?,
+                );
             }
             "--truncate" => truncate = true,
             "--dry-run" => dry_run = true,
@@ -539,7 +568,9 @@ fn parse_args() -> Result<Options> {
         bail!("--batch-size must be > 0");
     }
     if batch_size > MAX_SAFE_BATCH_SIZE {
-        bail!("--batch-size is too large for PostgreSQL parameter limits (max: {MAX_SAFE_BATCH_SIZE})");
+        bail!(
+            "--batch-size is too large for PostgreSQL parameter limits (max: {MAX_SAFE_BATCH_SIZE})"
+        );
     }
     if !input.exists() {
         bail!("input file not found: {}", input.display());

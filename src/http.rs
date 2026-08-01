@@ -144,8 +144,8 @@ async fn admin_list_keys(
     StateRef(state): StateRef<'_, Arc<AppState>>,
     req: &WebRequest<()>,
 ) -> WebResponse {
-    if let Err(response) = authorize_admin(&state, req) {
-        return response;
+    if let Err((status, message)) = authorize_admin(state, req) {
+        return admin_error(status, message);
     }
     match list_admin_keys(&state.auth).await {
         Ok(keys) => json_ok(keys),
@@ -158,8 +158,8 @@ async fn admin_create_key(
     Json(request): Json<CreateApiKeyRequest>,
     req: &WebRequest<()>,
 ) -> WebResponse {
-    if let Err(response) = authorize_admin(&state, req) {
-        return response;
+    if let Err((status, message)) = authorize_admin(state, req) {
+        return admin_error(status, message);
     }
     let domains = match normalize_domains(request.domains) {
         Ok(domains) => domains,
@@ -210,8 +210,8 @@ async fn admin_update_key(
     Json(request): Json<UpdateApiKeyRequest>,
     req: &WebRequest<()>,
 ) -> WebResponse {
-    if let Err(response) = authorize_admin(&state, req) {
-        return response;
+    if let Err((status, message)) = authorize_admin(state, req) {
+        return admin_error(status, message);
     }
     let domains = match normalize_domains(request.domains) {
         Ok(domains) => domains,
@@ -264,8 +264,8 @@ async fn admin_delete_key(
     Json(request): Json<DeleteApiKeyRequest>,
     req: &WebRequest<()>,
 ) -> WebResponse {
-    if let Err(response) = authorize_admin(&state, req) {
-        return response;
+    if let Err((status, message)) = authorize_admin(state, req) {
+        return admin_error(status, message);
     }
     let Some(pool) = state.auth.pool() else {
         return admin_error(
@@ -289,9 +289,12 @@ async fn admin_delete_key(
     }
 }
 
-fn authorize_admin(state: &AppState, req: &WebRequest<()>) -> Result<(), WebResponse> {
+fn authorize_admin(
+    state: &AppState,
+    req: &WebRequest<()>,
+) -> Result<(), (StatusCode, &'static str)> {
     let Some(configured_key) = state.admin_api_key.as_deref() else {
-        return Err(admin_error(
+        return Err((
             StatusCode::SERVICE_UNAVAILABLE,
             "administration is not configured; set ADMIN_API_KEY and restart the service",
         ));
@@ -309,10 +312,7 @@ fn authorize_admin(state: &AppState, req: &WebRequest<()>) -> Result<(), WebResp
     if supplied.is_some_and(|value| value == configured_key) {
         Ok(())
     } else {
-        Err(admin_error(
-            StatusCode::UNAUTHORIZED,
-            "a valid admin key is required",
-        ))
+        Err((StatusCode::UNAUTHORIZED, "a valid admin key is required"))
     }
 }
 
@@ -483,16 +483,16 @@ async fn search(
     let limit = params.limit.unwrap_or(10).clamp(1, 50);
     let street_only = is_street_only(params.street_only.as_deref());
 
-    if let Some(country_code) = country.as_deref() {
-        if !state.indexes.has_country(country_code) {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                ErrorResponse {
-                    error: "invalid_country",
-                    message: format!("country `{country_code}` is not indexed"),
-                },
-            );
-        }
+    if let Some(country_code) = country.as_deref()
+        && !state.indexes.has_country(country_code)
+    {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            ErrorResponse {
+                error: "invalid_country",
+                message: format!("country `{country_code}` is not indexed"),
+            },
+        );
     }
 
     if let Err(error) = state

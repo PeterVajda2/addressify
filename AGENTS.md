@@ -9,6 +9,8 @@ authorization and usage tracking are backed by PostgreSQL.
 ## Local commands
 
 - `cargo test` verifies the Rust project.
+- `scripts/check.sh` runs formatting, Clippy with warnings denied, tests, and a
+  release build; run it before committing a code change.
 - `cargo build --release` builds `target/release/addresswise`.
 - The binary commands are `serve`, `build-indexes`, `migrate`, and `dev`.
 - `scripts/public_benchmark.py` fails on HTTP errors. Supply its API key through

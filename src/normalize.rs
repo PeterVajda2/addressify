@@ -6,11 +6,11 @@ pub fn normalize_text(input: &str) -> String {
         if let Some(folded) = fold_alphanumeric(c) {
             normalized.push(folded);
             last_was_space = false;
-        } else if c.is_whitespace() || matches!(c, ',' | '.' | '-' | '/' | '#' | ':' | ';') {
-            if !last_was_space {
-                normalized.push(' ');
-                last_was_space = true;
-            }
+        } else if (c.is_whitespace() || matches!(c, ',' | '.' | '-' | '/' | '#' | ':' | ';'))
+            && !last_was_space
+        {
+            normalized.push(' ');
+            last_was_space = true;
         }
     }
 

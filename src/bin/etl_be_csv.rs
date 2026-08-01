@@ -4,7 +4,7 @@ use std::fs::File;
 use std::path::PathBuf;
 
 use addresswise::address_rules::{
-    clean_thoroughfare, format_display_address, normalize_address_parts,
+    DisplayAddressParts, clean_thoroughfare, format_display_address, normalize_address_parts,
 };
 use addresswise::normalize::normalize_text;
 use anyhow::{Context, Result, bail};
@@ -98,7 +98,11 @@ async fn main() -> Result<()> {
             .database_url
             .as_deref()
             .context("database URL missing; pass --database-url or set DATABASE_URL")?;
-        Some(PgPool::connect(db_url).await.context("failed to connect to PostgreSQL")?)
+        Some(
+            PgPool::connect(db_url)
+                .await
+                .context("failed to connect to PostgreSQL")?,
+        )
     };
 
     if opts.truncate {
@@ -164,7 +168,9 @@ async fn main() -> Result<()> {
             );
         }
 
-        if let Some(limit) = opts.limit && totals.rows_parsed >= limit {
+        if let Some(limit) = opts.limit
+            && totals.rows_parsed >= limit
+        {
             break;
         }
     }
@@ -175,10 +181,11 @@ async fn main() -> Result<()> {
         totals.rows_deduped += deduped;
     }
 
-    if !opts.dry_run && opts.limit.is_none() {
-        if let Some(pool) = pool.as_ref() {
-            deactivate_missing_rows(pool, &source_dataset, run_marker).await?;
-        }
+    if !opts.dry_run
+        && opts.limit.is_none()
+        && let Some(pool) = pool.as_ref()
+    {
+        deactivate_missing_rows(pool, &source_dataset, run_marker).await?;
     }
 
     println!(
@@ -227,16 +234,16 @@ fn to_row(record: BeRecord, source_dataset: &str, run_marker: i64) -> Option<Add
     let premise_type = parsed.house_number_type;
     let subpremise = parsed.unit;
 
-    let full_address = format_display_address(
-        "BE",
-        thoroughfare.as_deref(),
-        premise.as_deref(),
-        subpremise.as_deref(),
-        locality.as_deref(),
-        dependent_locality.as_deref(),
-        None,
-        postal_code.as_deref(),
-    );
+    let full_address = format_display_address(DisplayAddressParts {
+        country_code: "BE",
+        thoroughfare: thoroughfare.as_deref(),
+        house_number: premise.as_deref(),
+        unit: subpremise.as_deref(),
+        locality: locality.as_deref(),
+        dependent_locality: dependent_locality.as_deref(),
+        admin_area: None,
+        postal_code: postal_code.as_deref(),
+    });
     if full_address.is_empty() {
         return None;
     }
@@ -261,13 +268,19 @@ fn to_row(record: BeRecord, source_dataset: &str, run_marker: i64) -> Option<Add
     })
 }
 
-fn compose_multilingual_name<'a>(values: [&'a str; 3]) -> Option<String> {
-    let names = values.into_iter().filter_map(to_opt_string).fold(Vec::<String>::new(), |mut acc, value| {
-        if !acc.iter().any(|existing| existing.eq_ignore_ascii_case(&value)) {
-            acc.push(value);
-        }
-        acc
-    });
+fn compose_multilingual_name(values: [&str; 3]) -> Option<String> {
+    let names = values.into_iter().filter_map(to_opt_string).fold(
+        Vec::<String>::new(),
+        |mut acc, value| {
+            if !acc
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(&value))
+            {
+                acc.push(value);
+            }
+            acc
+        },
+    );
 
     match names.as_slice() {
         [] => None,
@@ -286,11 +299,18 @@ fn to_opt_string(value: &str) -> Option<String> {
 }
 
 fn clean_postal_code(value: &str) -> Option<String> {
-    let compact = value.chars().filter(|c| !c.is_ascii_whitespace()).collect::<String>();
+    let compact = value
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect::<String>();
     (!compact.is_empty()).then_some(compact)
 }
 
-async fn flush_batch(pool: Option<&PgPool>, rows: &mut Vec<AddressRow>, dry_run: bool) -> Result<(usize, usize)> {
+async fn flush_batch(
+    pool: Option<&PgPool>,
+    rows: &mut Vec<AddressRow>,
+    dry_run: bool,
+) -> Result<(usize, usize)> {
     if rows.is_empty() {
         return Ok((0, 0));
     }
@@ -374,11 +394,19 @@ async fn insert_batch(pool: &PgPool, rows: &[AddressRow]) -> Result<usize> {
             is_active = TRUE",
     );
 
-    let result = qb.build().execute(pool).await.context("failed bulk insert")?;
+    let result = qb
+        .build()
+        .execute(pool)
+        .await
+        .context("failed bulk insert")?;
     Ok(result.rows_affected() as usize)
 }
 
-async fn deactivate_missing_rows(pool: &PgPool, source_dataset: &str, run_marker: i64) -> Result<()> {
+async fn deactivate_missing_rows(
+    pool: &PgPool,
+    source_dataset: &str,
+    run_marker: i64,
+) -> Result<()> {
     sqlx::query(
         r#"
         UPDATE addresses
@@ -408,14 +436,22 @@ fn parse_args() -> Result<Options> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--input" => input = PathBuf::from(args.next().context("missing value for --input")?),
-            "--database-url" => database_url = Some(args.next().context("missing value for --database-url")?),
+            "--database-url" => {
+                database_url = Some(args.next().context("missing value for --database-url")?)
+            }
             "--batch-size" => {
                 let value = args.next().context("missing value for --batch-size")?;
-                batch_size = value.parse::<usize>().with_context(|| format!("invalid --batch-size: {value}"))?;
+                batch_size = value
+                    .parse::<usize>()
+                    .with_context(|| format!("invalid --batch-size: {value}"))?;
             }
             "--limit" => {
                 let value = args.next().context("missing value for --limit")?;
-                limit = Some(value.parse::<usize>().with_context(|| format!("invalid --limit: {value}"))?);
+                limit = Some(
+                    value
+                        .parse::<usize>()
+                        .with_context(|| format!("invalid --limit: {value}"))?,
+                );
             }
             "--truncate" => truncate = true,
             "--dry-run" => dry_run = true,
@@ -431,7 +467,9 @@ fn parse_args() -> Result<Options> {
         bail!("--batch-size must be > 0");
     }
     if batch_size > MAX_SAFE_BATCH_SIZE {
-        bail!("--batch-size is too large for PostgreSQL parameter limits (max: {MAX_SAFE_BATCH_SIZE})");
+        bail!(
+            "--batch-size is too large for PostgreSQL parameter limits (max: {MAX_SAFE_BATCH_SIZE})"
+        );
     }
     if !input.exists() {
         bail!("input file not found: {}", input.display());

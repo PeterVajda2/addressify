@@ -1,6 +1,6 @@
 use std::error::Error;
-use std::future::poll_fn;
 use std::fs;
+use std::future::poll_fn;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -63,9 +63,9 @@ async fn main() -> AppResult<()> {
     let mut tasks = Vec::with_capacity(WORKERS);
     for worker in 0..WORKERS {
         let endpoint = endpoint.clone();
-        tasks.push(tokio::spawn(async move {
-            run_worker(worker, endpoint).await
-        }));
+        tasks.push(tokio::spawn(
+            async move { run_worker(worker, endpoint).await },
+        ));
     }
 
     for task in tasks {
@@ -171,9 +171,7 @@ fn client_endpoint() -> AppResult<quinn::Endpoint> {
             .map_err(|error| format!("invalid idle timeout: {error}"))?,
     ));
 
-    let mut client_config = quinn::ClientConfig::new(Arc::new(
-        QuicClientConfig::try_from(crypto)?,
-    ));
+    let mut client_config = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto)?));
     client_config.transport_config(Arc::new(transport));
 
     let mut endpoint = quinn::Endpoint::client("[::]:0".parse()?)?;
@@ -203,7 +201,11 @@ fn print_report(all_runs: &[Vec<f64>], wall: Duration) {
 
     println!();
     println!("HTTP/3 benchmark");
-    println!("workers={WORKERS} reps={REPS} runs={} wall={:.3} ms", all_runs.len(), wall.as_secs_f64() * 1000.0);
+    println!(
+        "workers={WORKERS} reps={REPS} runs={} wall={:.3} ms",
+        all_runs.len(),
+        wall.as_secs_f64() * 1000.0
+    );
     println!();
     println!("Per query:");
     for (idx, query) in QUERIES.iter().enumerate() {

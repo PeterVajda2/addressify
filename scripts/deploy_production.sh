@@ -79,7 +79,9 @@ fi
 sudo systemctl start addresswise
 for attempt in {1..15}; do
     if sudo systemctl is-active --quiet addresswise \
-        && curl --fail --silent --show-error http://127.0.0.1:8080/health; then
+        && curl --fail --silent --show-error http://127.0.0.1:8080/health >/dev/null \
+        && curl --fail --silent --show-error http://127.0.0.1:8080/ | grep -Fq '<title>addresswise</title>' \
+        && curl --fail --silent --show-error http://127.0.0.1:8080/admin | grep -Fq '<title>addresswise — API key admin</title>'; then
         break
     fi
     if [[ "$attempt" == 15 ]]; then

@@ -17,8 +17,9 @@ const USAGE_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub enum AuthState {
-    Disabled,
     Enabled(Arc<AuthService>),
+    #[cfg(test)]
+    Disabled,
 }
 
 pub(crate) struct AuthService {
@@ -68,26 +69,32 @@ impl AuthState {
         api_key: Option<&str>,
     ) -> Result<(), ErrorResponse> {
         match self {
-            Self::Disabled => Ok(()),
             Self::Enabled(service) => authorize_request(service, req, remote_addr, api_key).await,
+            #[cfg(test)]
+            Self::Disabled => Ok(()),
         }
     }
 
     /// Discard cached authorizations after an administrator changes a key or its domains.
     pub fn clear_authorization_cache(&self) {
-        if let Self::Enabled(service) = self {
-            service
-                .authorized_keys
-                .lock()
-                .expect("authorization cache lock poisoned")
-                .clear();
+        match self {
+            Self::Enabled(service) => {
+                service
+                    .authorized_keys
+                    .lock()
+                    .expect("authorization cache lock poisoned")
+                    .clear();
+            }
+            #[cfg(test)]
+            Self::Disabled => {}
         }
     }
 
     pub(crate) fn pool(&self) -> Option<&PgPool> {
         match self {
-            Self::Disabled => None,
             Self::Enabled(service) => Some(&service.pool),
+            #[cfg(test)]
+            Self::Disabled => None,
         }
     }
 }
@@ -257,18 +264,12 @@ async fn flush_usage_entry(pool: &PgPool, usage: &UsageKey, count: u64) -> Resul
     .execute(&mut *transaction)
     .await?;
 
-    sqlx::query(
-        "insert into api_key_usage_daily (api_key_id, usage_date, request_domain, request_count, last_request_at)
-         values ($1, current_date, $2, 1, now())
-         on conflict (api_key_id, usage_date, request_domain)
-         do update set request_count = api_key_usage_daily.request_count + $3,
-             last_request_at = excluded.last_request_at",
-    )
-    .bind(usage.api_key_id)
-    .bind(&usage.domain)
-    .bind(count)
-    .execute(&mut *transaction)
-    .await?;
+    sqlx::query(UPSERT_DAILY_USAGE_SQL)
+        .bind(usage.api_key_id)
+        .bind(&usage.domain)
+        .bind(count)
+        .execute(&mut *transaction)
+        .await?;
     transaction.commit().await
 }
 
@@ -291,11 +292,18 @@ pub fn extract_request_domain(req: &WebRequest<()>) -> Option<String> {
         .or_else(|| header_value(req, header::REFERER).and_then(parse_domain_from_url))
 }
 
-fn header_value<'a>(req: &'a WebRequest<()>, name: header::HeaderName) -> Option<&'a str> {
+fn header_value(req: &WebRequest<()>, name: header::HeaderName) -> Option<&str> {
     req.headers()
         .get(name)
         .and_then(|value| value.to_str().ok())
 }
+
+const UPSERT_DAILY_USAGE_SQL: &str =
+    "insert into api_key_usage_daily (api_key_id, usage_date, request_domain, request_count, last_request_at)
+     values ($1, current_date, $2, $3, now())
+     on conflict (api_key_id, usage_date, request_domain)
+     do update set request_count = api_key_usage_daily.request_count + $3,
+         last_request_at = excluded.last_request_at";
 
 fn parse_domain_from_url(value: &str) -> Option<String> {
     let url = Url::parse(value).ok()?;
@@ -332,7 +340,7 @@ pub fn db_dir() -> &'static Path {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_request_domain, normalize_domain};
+    use super::{UPSERT_DAILY_USAGE_SQL, extract_request_domain, normalize_domain};
     use xitca_web::http::{Uri, WebRequest, header};
 
     #[test]
@@ -371,5 +379,10 @@ mod tests {
             extract_request_domain(&req),
             Some(String::from("addresswise.eu"))
         );
+    }
+
+    #[test]
+    fn daily_usage_insert_uses_the_queued_batch_count() {
+        assert!(UPSERT_DAILY_USAGE_SQL.contains("values ($1, current_date, $2, $3, now())"));
     }
 }

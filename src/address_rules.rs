@@ -5,6 +5,17 @@ pub struct ParsedPremise {
     pub house_number_type: Option<String>,
 }
 
+pub struct DisplayAddressParts<'a> {
+    pub country_code: &'a str,
+    pub thoroughfare: Option<&'a str>,
+    pub house_number: Option<&'a str>,
+    pub unit: Option<&'a str>,
+    pub locality: Option<&'a str>,
+    pub dependent_locality: Option<&'a str>,
+    pub admin_area: Option<&'a str>,
+    pub postal_code: Option<&'a str>,
+}
+
 pub fn normalize_address_parts(
     country_code: &str,
     premise: Option<&str>,
@@ -31,27 +42,18 @@ pub fn clean_thoroughfare(input: Option<&str>) -> Option<String> {
     collapse_spaces(input)
 }
 
-pub fn format_display_address(
-    country_code: &str,
-    thoroughfare: Option<&str>,
-    house_number: Option<&str>,
-    unit: Option<&str>,
-    locality: Option<&str>,
-    dependent_locality: Option<&str>,
-    admin_area: Option<&str>,
-    postal_code: Option<&str>,
-) -> String {
-    let street = collapse_spaces(thoroughfare);
-    let house = collapse_spaces(house_number);
-    let unit = collapse_spaces(unit);
-    let city = collapse_spaces(locality);
-    let district = collapse_spaces(dependent_locality);
-    let region = collapse_spaces(admin_area);
-    let postal = collapse_spaces(postal_code);
+pub fn format_display_address(address: DisplayAddressParts<'_>) -> String {
+    let street = collapse_spaces(address.thoroughfare);
+    let house = collapse_spaces(address.house_number);
+    let unit = collapse_spaces(address.unit);
+    let city = collapse_spaces(address.locality);
+    let district = collapse_spaces(address.dependent_locality);
+    let region = collapse_spaces(address.admin_area);
+    let postal = collapse_spaces(address.postal_code);
 
     let mut parts: Vec<String> = Vec::new();
 
-    match country_code {
+    match address.country_code {
         "CZ" | "SK" => {
             if let Some(street) = street {
                 let first = if let Some(house) = house {
@@ -105,7 +107,7 @@ pub fn format_display_address(
         }
     }
 
-    parts.push(country_code.to_string());
+    parts.push(address.country_code.to_string());
     parts.join(", ")
 }
 
@@ -213,7 +215,7 @@ fn collapse_spaces(input: Option<&str>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_display_address, normalize_address_parts};
+    use super::{DisplayAddressParts, format_display_address, normalize_address_parts};
 
     #[test]
     fn parses_cz_conscription_marker() {
@@ -224,16 +226,16 @@ mod tests {
 
     #[test]
     fn formats_cz_without_street() {
-        let rendered = format_display_address(
-            "CZ",
-            None,
-            Some("508"),
-            None,
-            Some("Jaromerice"),
-            None,
-            None,
-            Some("56944"),
-        );
+        let rendered = format_display_address(DisplayAddressParts {
+            country_code: "CZ",
+            thoroughfare: None,
+            house_number: Some("508"),
+            unit: None,
+            locality: Some("Jaromerice"),
+            dependent_locality: None,
+            admin_area: None,
+            postal_code: Some("56944"),
+        });
         assert_eq!(rendered, "508, 56944 Jaromerice, CZ");
     }
 }

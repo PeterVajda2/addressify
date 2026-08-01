@@ -246,7 +246,7 @@ fn stream_postgres_addresses(
         writer.add_document(tantivy_document(&address, fields))?;
         indexed_count += 1;
 
-        if indexed_count % 100_000 == 0 {
+        if indexed_count.is_multiple_of(100_000) {
             println!("indexed {indexed_count} addresses...");
         }
     }
