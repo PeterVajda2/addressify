@@ -778,7 +778,9 @@ mod tests {
         assert!(body.contains("id=\"country-input\""));
         assert!(body.contains("Select a country"));
         assert!(body.contains("streetInput.disabled = !countryInput.value"));
-        assert!(body.contains("label for=\"street-input\">Street</label>"));
+        assert!(body.contains("label for=\"street-input\">Street &amp; house number</label>"));
+        assert!(body.contains("A little help finding your way"));
+        assert!(body.contains("class=\"brand-mark\""));
         assert!(body.contains("label for=\"city-input\">City</label>"));
         assert!(body.contains("label for=\"postal-code-input\">Postal code</label>"));
         assert!(body.contains("section class=\"panel\""));
