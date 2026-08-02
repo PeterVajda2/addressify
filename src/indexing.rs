@@ -316,8 +316,7 @@ fn address_copy_sql(country_code: &str) -> String {
         .unwrap_or_default();
 
     format!(
-        "copy (
-            select json_build_object(
+        "select json_build_object(
                 'country_code', trim(country_code),
                 'admin_area', admin_area,
                 'locality', locality,
@@ -333,8 +332,7 @@ fn address_copy_sql(country_code: &str) -> String {
             from addresses
             where country_code = '{}' and is_active
             order by id
-            {limit_clause}
-        ) to stdout with (format csv, quote E'\\001', escape E'\\002')",
+            {limit_clause}",
         sql_literal(country_code)
     )
 }
