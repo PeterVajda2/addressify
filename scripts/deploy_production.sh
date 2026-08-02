@@ -38,13 +38,29 @@ test -x "$next_binary"
 
 if [[ "$rebuild_indexes" == true ]]; then
     next_indexes="$runtime_dir/data/indexes.next.$$"
+    country_sql="select string_agg(country_code, chr(44) order by country_code) from (select distinct upper(trim(country_code)) as country_code from addresses where is_active and length(trim(country_code)) > 0) countries where country_code ~ '^[A-Z]{2}$';"
+    country_codes="$(sudo sh -c '
+        set -a
+        . /etc/addresswise.env
+        set +a
+        exec psql -qAt -d "$DATABASE_URL" -c "$1"
+    ' sh "$country_sql")"
+    if [[ -z "$country_codes" ]]; then
+        echo "No active country codes found in the production database." >&2
+        exit 1
+    fi
     sudo sh -c '
         set -a
         . /etc/addresswise.env
         set +a
-        export COUNTRY_CODES=CZ,SK INDEX_DIR="$1"
-        exec runuser -u peter -- "$2" build-indexes
-    ' sh "$next_indexes" "$next_binary"
+        export COUNTRY_CODES="$1" INDEX_DIR="$2"
+        exec runuser -u peter -- "$3" build-indexes
+    ' sh "$country_codes" "$next_indexes" "$next_binary"
+
+    sudo install -d -m 0755 /etc/systemd/system/addresswise.service.d
+    printf '[Service]\nEnvironment=COUNTRY_CODES=%s\n' "$country_codes" \
+        | sudo tee /etc/systemd/system/addresswise.service.d/country-codes.conf >/dev/null
+    sudo systemctl daemon-reload
 fi
 
 timestamp="$(date +%Y%m%d%H%M%S)"

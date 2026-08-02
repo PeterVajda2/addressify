@@ -37,6 +37,12 @@ Optional:
 - `INDEX_LIMIT`
   Limits rows during index builds for testing.
 
+Production index rebuilds (`scripts/deploy_production.sh --rebuild-indexes`) derive
+`COUNTRY_CODES` from every active, valid two-letter country code in the database.
+They also install a systemd drop-in with that same list, so `serve` loads all of
+the rebuilt country indexes. Run this deployment mode again after importing a new
+country.
+
 ## Build and run
 
 ```bash

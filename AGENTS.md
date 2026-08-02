@@ -47,6 +47,10 @@ Use `scripts/deploy_production.sh` to build locally, upload a staged binary,
 and cut over the runtime bundle. Pass `--rebuild-indexes` for indexing schema
 or search-behavior changes. Street autocomplete materializes every normalized
 street prefix as an index term, so changes to that behavior require this mode.
+This mode derives every active two-letter country code from the production
+database and persists it in a systemd drop-in, overriding the base service
+unit's `COUNTRY_CODES` setting. Run it after importing addresses for a new
+country.
 It builds into a sibling index directory
 while the service stays online, then swaps directories during the short service
 restart. The source checkout is still kept on `master` for troubleshooting.
