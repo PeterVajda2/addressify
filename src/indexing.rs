@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Instant;
 
+use base64::Engine;
 use serde_json::Value as JsonValue;
 use tantivy::schema::{STORED, STRING, Schema, TEXT, TantivyDocument};
 use tantivy::{Index, IndexWriter, ReloadPolicy};
@@ -316,7 +317,7 @@ fn address_copy_sql(country_code: &str) -> String {
         .unwrap_or_default();
 
     format!(
-        "select json_build_object(
+        "select replace(encode(convert_to(json_build_object(
                 'country_code', trim(country_code),
                 'admin_area', admin_area,
                 'locality', locality,
@@ -328,7 +329,7 @@ fn address_copy_sql(country_code: &str) -> String {
                 'postal_code', postal_code,
                 'full_address', full_address,
                 'search_text', search_text
-            )::text
+            )::text, 'UTF8'), 'base64'), E'\\n', '')
             from addresses
             where country_code = '{}' and is_active
             order by id
@@ -342,7 +343,8 @@ fn sql_literal(value: &str) -> String {
 }
 
 fn address_from_json_line(line: &str) -> AppResult<Address> {
-    let value: JsonValue = serde_json::from_str(line)?;
+    let json = base64::engine::general_purpose::STANDARD.decode(line)?;
+    let value: JsonValue = serde_json::from_slice(&json)?;
     let country_code = json_required_string(&value, "country_code")?;
     let full_address = json_required_string(&value, "full_address")?;
     let search_text = json_required_string(&value, "search_text")?;
