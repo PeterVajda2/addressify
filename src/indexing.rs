@@ -334,7 +334,7 @@ fn address_copy_sql(country_code: &str) -> String {
             where country_code = '{}' and is_active
             order by id
             {limit_clause}
-        ) to stdout",
+        ) to stdout with (format csv, quote E'\\001', escape E'\\002')",
         sql_literal(country_code)
     )
 }
