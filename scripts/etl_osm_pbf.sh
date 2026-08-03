@@ -17,12 +17,13 @@ country_code="${OSM_COUNTRY_CODE:-DE}"
 database_url="${DATABASE_URL:?set DATABASE_URL}"
 etl_binary="${ETL_GEOJSON_BINARY:-$root_dir/target/release/etl_geojson}"
 batch_size="${OSM_ETL_BATCH_SIZE:-4000}"
-fifo="$(mktemp -u /tmp/addresswise-osm-geojson.XXXXXX)"
+fifo="/tmp/${country_code}_osm_pbf_source.geojson"
 
 [[ -r "$pbf_file" ]] || { echo "PBF is not readable: $pbf_file" >&2; exit 1; }
 [[ -x "$etl_binary" ]] || { echo "ETL binary is not executable: $etl_binary" >&2; exit 1; }
 command -v osmium >/dev/null || { echo "osmium is required" >&2; exit 1; }
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
+[[ ! -e "$fifo" ]] || { echo "temporary FIFO already exists: $fifo" >&2; exit 1; }
 
 mkfifo "$fifo"
 cleanup() {
