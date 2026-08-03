@@ -61,6 +61,10 @@ Confirm `systemctl is-active addresswise` is `active` and
 `curl --fail http://127.0.0.1:8080/health` succeeds before reporting
 completion.
 
+For OSM PBF address replacement imports, production has `osmium-tool` and
+`jq` installed. Use `scripts/etl_osm_pbf.sh`; it streams tagged OSM addresses
+through a FIFO and does not create a large GeoJSON intermediate file.
+
 ## Keeping this file current
 
 Whenever work reveals a new or corrected project, deployment, service, or
