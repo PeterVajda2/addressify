@@ -18,7 +18,7 @@ database_url="${DATABASE_URL:?set DATABASE_URL}"
 etl_binary="${ETL_GEOJSON_BINARY:-$root_dir/target/release/etl_geojson}"
 batch_size="${OSM_ETL_BATCH_SIZE:-4000}"
 fifo="/tmp/${country_code}_osm_pbf_source.geojson"
-filtered_pbf="$(mktemp /tmp/addresswise-osm-filtered.XXXXXX.pbf)"
+filtered_pbf="$(mktemp -u /tmp/addresswise-osm-filtered.XXXXXX.pbf)"
 
 [[ -r "$pbf_file" ]] || { echo "PBF is not readable: $pbf_file" >&2; exit 1; }
 [[ -x "$etl_binary" ]] || { echo "ETL binary is not executable: $etl_binary" >&2; exit 1; }
