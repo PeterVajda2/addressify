@@ -37,7 +37,7 @@ trap cleanup EXIT
     osmium tags-filter "$pbf_file" \
         nwr/addr:housenumber nwr/addr:street nwr/addr:place \
         -f pbf -o - \
-    | osmium export - -f geojsonseq -a type,id \
+    | osmium export - -F pbf -f geojsonseq -a type,id \
     | jq --seq -c '
         . as $feature
         | $feature.properties as $p
