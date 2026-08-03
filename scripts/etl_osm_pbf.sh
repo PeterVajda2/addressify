@@ -18,6 +18,7 @@ database_url="${DATABASE_URL:?set DATABASE_URL}"
 etl_binary="${ETL_GEOJSON_BINARY:-$root_dir/target/release/etl_geojson}"
 batch_size="${OSM_ETL_BATCH_SIZE:-4000}"
 fifo="/tmp/${country_code}_osm_pbf_source.geojson"
+filtered_pbf="$(mktemp /tmp/addresswise-osm-filtered.XXXXXX.pbf)"
 
 [[ -r "$pbf_file" ]] || { echo "PBF is not readable: $pbf_file" >&2; exit 1; }
 [[ -x "$etl_binary" ]] || { echo "ETL binary is not executable: $etl_binary" >&2; exit 1; }
@@ -28,16 +29,19 @@ command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 mkfifo "$fifo"
 cleanup() {
     rm -f "$fifo"
+    rm -f "$filtered_pbf"
 }
 trap cleanup EXIT
 
-# tags-filter keeps referenced nodes by default, which lets osmium export
-# address-bearing ways and relations as GeoJSON as well as address nodes.
+# tags-filter needs two passes over its input, so write its much smaller output
+# to a temporary PBF. It keeps referenced nodes by default, allowing osmium to
+# export address-bearing ways and relations as well as address nodes.
+osmium tags-filter "$pbf_file" \
+    nwr/addr:housenumber nwr/addr:street nwr/addr:place \
+    -f pbf -o "$filtered_pbf"
+
 (
-    osmium tags-filter "$pbf_file" \
-        nwr/addr:housenumber nwr/addr:street nwr/addr:place \
-        -f pbf -o - \
-    | osmium export - -F pbf -f geojsonseq -a type,id \
+    osmium export "$filtered_pbf" -f geojsonseq -a type,id \
     | jq --seq -c '
         . as $feature
         | $feature.properties as $p
