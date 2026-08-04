@@ -100,6 +100,17 @@ only those two directories with rollback protection, and confirm
 `systemctl is-active addresswise` plus `/health`. Keep the live service online
 while the import and index build run.
 
+Completed 2026-08-04: the importer finished with `35,323,479` parsed and
+`29,357,037` inserted rows, with `skipped_json=0` and `skipped_invalid=0`.
+The replacement indexes built `19,575,650` active DE addresses and `369,715`
+distinct DE streets in
+`/home/peter/addresswise-deploy/data/indexes.de.next.20260804143840`. Only
+`de` and `de_streets` were swapped into the live index root; the rollback
+copies are `de.pre_de_reimport.20260804145634` and
+`de_streets.pre_de_reimport.20260804145634`. An authenticated local API search
+verified `Konrad-Adenauer-Allee 1-11, Bad Vilbel, 61118`; systemd and
+`/health` were both healthy after the cutover.
+
 ## Keeping this file current
 
 Whenever work reveals a new or corrected project, deployment, service, or
