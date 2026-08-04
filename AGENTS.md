@@ -63,7 +63,10 @@ completion.
 
 For OSM PBF address replacement imports, production has `osmium-tool` and
 `jq` installed. Use `scripts/etl_osm_pbf.sh`; it streams tagged OSM addresses
-through a FIFO and does not create a large GeoJSON intermediate file.
+through a FIFO and does not create a large GeoJSON intermediate file. The
+script requires a locality by default, resolving standard `addr:*` and
+`is_in:*` city/municipality tags; do not import locality-less records without
+a spatial boundary/place enrichment pass.
 
 ## Keeping this file current
 

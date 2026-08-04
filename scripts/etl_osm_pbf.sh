@@ -17,6 +17,10 @@ country_code="${OSM_COUNTRY_CODE:-DE}"
 database_url="${DATABASE_URL:?set DATABASE_URL}"
 etl_binary="${ETL_GEOJSON_BINARY:-$root_dir/target/release/etl_geojson}"
 batch_size="${OSM_ETL_BATCH_SIZE:-4000}"
+# A locality is mandatory by default. Do not set this to false for production:
+# address objects that rely solely on a separate boundary/place feature need a
+# spatial-enrichment pass before they can be imported.
+require_locality="${OSM_REQUIRE_LOCALITY:-true}"
 fifo="/tmp/${country_code}_osm_pbf_source.geojson"
 filtered_pbf="$(mktemp -u /tmp/addresswise-osm-filtered.XXXXXX.pbf)"
 
@@ -42,13 +46,29 @@ osmium tags-filter "$pbf_file" \
 
 (
     osmium export "$filtered_pbf" -f geojsonseq -a type,id \
-    | jq --seq -c '
+    | jq --seq -c --arg require_locality "$require_locality" '
         . as $feature
         | $feature.properties as $p
         | select(
             (($p["addr:housenumber"] // "") | length > 0)
             or ((($p["addr:street"] // "") | length > 0) and (($p["addr:postcode"] // "") | length > 0))
           )
+        | [
+            $p["addr:city"],
+            $p["addr:town"],
+            $p["addr:village"],
+            $p["addr:municipality"],
+            $p["addr:place"],
+            $p["is_in:city"],
+            $p["is_in:municipality"]
+          ]
+          | map(
+              select(type == "string")
+              | gsub("^[[:space:]]+|[[:space:]]+$"; "")
+              | select(length > 0)
+            )
+          | first as $locality
+        | select($require_locality != "true" or $locality != null)
         | {
             type: "Feature",
             properties: {
@@ -56,7 +76,7 @@ osmium tags-filter "$pbf_file" \
               number: $p["addr:housenumber"],
               street: $p["addr:street"],
               unit: $p["addr:unit"],
-              city: ($p["addr:city"] // $p["addr:place"]),
+              city: $locality,
               district: ($p["addr:district"] // $p["addr:suburb"]),
               region: ($p["addr:state"] // $p["is_in:state"]),
               postcode: $p["addr:postcode"]
