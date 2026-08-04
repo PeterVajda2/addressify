@@ -68,6 +68,38 @@ script requires a locality by default, resolving standard `addr:*` and
 `is_in:*` city/municipality tags; do not import locality-less records without
 a spatial boundary/place enrichment pass.
 
+### Active German OSM re-import (2026-08-04)
+
+The previous DE OSM import was removed because it included duplicate
+address-tagged OSM objects without a locality. The corrected importer skips
+those objects (`OSM_REQUIRE_LOCALITY=true`), retaining the corresponding
+objects that contain `addr:city`/another supported locality tag.
+
+The source PBF is `/home/peter/germany-latest.osm.pbf` on production (SHA-256
+`15f7a663ee428b8ab9e0cb30e6097ca30a97a06b4b102a0085208dcb41b9abfb`). The
+import was launched in the background with log
+`/home/peter/addresswise-deploy/imports/de_osm_reimport_20260804.log`:
+
+```sh
+sudo sh -c '
+  set -euo pipefail
+  set -a; . /etc/addresswise.env; set +a
+  export OSM_COUNTRY_CODE=DE OSM_REQUIRE_LOCALITY=true
+  export ETL_GEOJSON_BINARY=/home/peter/addresswise-src/etl_geojson
+  exec runuser -u peter -- /home/peter/addresswise-src/scripts/etl_osm_pbf.sh \
+    /home/peter/germany-latest.osm.pbf
+'
+```
+
+Before treating the import as successful, wait for that process to exit and
+the log to report zero skipped JSON/invalid rows. Then query a ten-row DE
+sample and verify non-empty street, house number, postcode, locality, and
+coordinates; confirm `Konrad-Adenauer-Allee 1-11` is `Bad Vilbel, 61118`.
+Build replacement DE and `de_streets` indexes in a sibling directory, cut over
+only those two directories with rollback protection, and confirm
+`systemctl is-active addresswise` plus `/health`. Keep the live service online
+while the import and index build run.
+
 ## Keeping this file current
 
 Whenever work reveals a new or corrected project, deployment, service, or
