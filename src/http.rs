@@ -702,10 +702,29 @@ fn ranked_validation_matches(
 
 fn validation_confidence(request: &ValidateRequest, address: &StructuredAddress) -> f64 {
     let street = text_similarity(&request.street, address.thoroughfare.as_deref());
-    let house_number = text_similarity(&request.house_number, address.premise.as_deref());
+    let house_number = house_number_similarity(&request.house_number, address);
     let postal_code = compact_similarity(&request.postal_code, address.postal_code.as_deref());
-    let city = text_similarity(&request.city, address.locality.as_deref());
+    let city = [
+        text_similarity(&request.city, address.locality.as_deref()),
+        text_similarity(&request.city, address.dependent_locality.as_deref()),
+    ]
+    .into_iter()
+    .fold(0.0, f64::max);
     0.45 * street + 0.20 * house_number + 0.20 * postal_code + 0.15 * city
+}
+
+fn house_number_similarity(input: &str, address: &StructuredAddress) -> f64 {
+    let full_number = match (&address.premise, &address.subpremise) {
+        (Some(premise), Some(subpremise)) => Some(format!("{premise}/{subpremise}")),
+        _ => None,
+    };
+    [
+        text_similarity(input, address.premise.as_deref()),
+        text_similarity(input, address.subpremise.as_deref()),
+        text_similarity(input, full_number.as_deref()),
+    ]
+    .into_iter()
+    .fold(0.0, f64::max)
 }
 
 fn address_matches_request(request: &ValidateRequest, address: &StructuredAddress) -> bool {
@@ -843,7 +862,7 @@ mod tests {
     use super::{
         AppState, ValidateRequest, address_matches_request, admin_home, health, home,
         is_street_only, normalize_country, ranked_validation_matches, search,
-        validation_candidates_async,
+        validation_candidates_async, validation_confidence,
     };
     use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -978,6 +997,32 @@ mod tests {
         assert!(!address_matches_request(&request, &best.address));
         assert_eq!(best.address.postal_code.as_deref(), Some("040 01"));
         assert!(best.confidence_ratio < super::VALIDATION_SUGGESTION_THRESHOLD);
+    }
+
+    #[test]
+    fn validation_scores_a_matching_subpremise_and_dependent_locality() {
+        let request = ValidateRequest {
+            street: String::from("Na pasekach"),
+            house_number: String::from("20"),
+            postal_code: String::from("83106"),
+            city: String::from("bratislava"),
+            country: String::from("SK"),
+        };
+        let address = StructuredAddress {
+            country_code: String::from("SK"),
+            admin_area: None,
+            locality: None,
+            dependent_locality: Some(String::from("Bratislava-Rača")),
+            thoroughfare: Some(String::from("Na pasekách")),
+            premise: Some(String::from("3085")),
+            premise_type: None,
+            subpremise: Some(String::from("20")),
+            postal_code: Some(String::from("83106")),
+            full_address: String::from("Na pasekách 3085/20, Bratislava-Rača, 83106, SK"),
+        };
+
+        assert!(!address_matches_request(&request, &address));
+        assert!(validation_confidence(&request, &address) > 0.90);
     }
 
     #[tokio::test]

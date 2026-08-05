@@ -108,9 +108,15 @@ impl AddressIndex {
             return Ok(Vec::new());
         }
 
-        let query = validation_query(self.fields.search_text, &normalized_query);
         let searcher = self.reader.searcher();
-        search_tantivy(&searcher, &query, self.fields, limit)
+        let fuzzy_query = validation_query(self.fields.search_text, &normalized_query);
+        let exact_query = autocomplete_query(self.fields.search_text, &normalized_query);
+        let mut candidates = search_tantivy(&searcher, &fuzzy_query, self.fields, limit)?;
+        // Keep high-precision autocomplete matches as well: a fuzzy query can
+        // rank a common partial house number below the candidate that contains
+        // the exact full structured number (for example `3085/20`).
+        candidates.extend(search_tantivy(&searcher, &exact_query, self.fields, limit)?);
+        Ok(candidates)
     }
 }
 
