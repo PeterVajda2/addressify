@@ -97,6 +97,21 @@ impl AddressIndex {
     pub fn doc_count(&self) -> u64 {
         self.reader.searcher().num_docs()
     }
+
+    pub fn validation_candidates(
+        &self,
+        user_input: &str,
+        limit: usize,
+    ) -> tantivy::Result<Vec<SearchResult>> {
+        let normalized_query = normalize_text(user_input);
+        if normalized_query.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let query = validation_query(self.fields.search_text, &normalized_query);
+        let searcher = self.reader.searcher();
+        search_tantivy(&searcher, &query, self.fields, limit)
+    }
 }
 
 pub async fn search_async(
@@ -107,6 +122,17 @@ pub async fn search_async(
     let result = spawn_blocking(move || index.search(&query, limit))
         .await
         .map_err(|error| format!("blocking search task failed: {error}"))?;
+    result.map_err(Into::into)
+}
+
+pub async fn validation_candidates_async(
+    index: Arc<AddressIndex>,
+    query: String,
+    limit: usize,
+) -> AppResult<Vec<SearchResult>> {
+    let result = spawn_blocking(move || index.validation_candidates(&query, limit))
+        .await
+        .map_err(|error| format!("blocking validation task failed: {error}"))?;
     result.map_err(Into::into)
 }
 
@@ -225,6 +251,26 @@ fn autocomplete_query(search_field: Field, normalized_query: &str) -> Box<dyn Qu
             )) as Box<dyn Query>,
         ));
     }
+
+    Box::new(BooleanQuery::new(subqueries))
+}
+
+fn validation_query(search_field: Field, normalized_query: &str) -> Box<dyn Query> {
+    let subqueries = normalized_query
+        .split_whitespace()
+        .filter(|token| token.len() > 1)
+        .map(|token| {
+            let distance = if token.chars().count() >= 6 { 2 } else { 1 };
+            (
+                Occur::Should,
+                Box::new(FuzzyTermQuery::new(
+                    Term::from_field_text(search_field, token),
+                    distance,
+                    true,
+                )) as Box<dyn Query>,
+            )
+        })
+        .collect::<Vec<_>>();
 
     Box::new(BooleanQuery::new(subqueries))
 }

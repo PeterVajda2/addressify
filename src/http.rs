@@ -19,8 +19,9 @@ use xitca_web::{
 
 use crate::AppResult;
 use crate::auth::{AuthState, ErrorResponse, error_status, normalize_domain};
-use crate::models::SearchResult;
-use crate::search::{AddressIndexes, search_indexes_async};
+use crate::models::{SearchResult, StructuredAddress};
+use crate::normalize::normalize_text;
+use crate::search::{AddressIndexes, search_indexes_async, validation_candidates_async};
 
 const MAX_WORKERS: usize = 8;
 const BLOCKING_THREADS_PER_WORKER: usize = 8;
@@ -48,6 +49,38 @@ struct SearchResponse {
     country: Option<String>,
     count: usize,
     results: Vec<SearchResult>,
+}
+
+const VALIDATION_SUGGESTION_THRESHOLD: f64 = 0.90;
+const VALIDATION_CANDIDATE_LIMIT: usize = 100;
+const VALIDATION_SUGGESTION_LIMIT: usize = 5;
+
+#[derive(Debug, Deserialize)]
+struct ValidateParams {
+    api_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ValidateRequest {
+    street: String,
+    house_number: String,
+    postal_code: String,
+    city: String,
+    country: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ValidationMatch {
+    confidence_ratio: f64,
+    address: StructuredAddress,
+}
+
+#[derive(Debug, Serialize)]
+struct ValidationResponse {
+    valid: bool,
+    confidence_ratio: f64,
+    corrected_address: Option<StructuredAddress>,
+    suggestions: Vec<ValidationMatch>,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,6 +150,7 @@ pub fn serve_with_state(addr: String, state: Arc<AppState>) -> AppResult<()> {
         .at("/health", get(handler_service(health)))
         .at("/search", get(handler_service(search)))
         .at("/suggest", get(handler_service(search)))
+        .at("/validate", post(handler_service(validate)))
         .at("/", get(handler_service(home)))
         .serve()
         .worker_threads(workers)
@@ -528,6 +562,209 @@ async fn search(
     }
 }
 
+async fn validate(
+    StateRef(state): StateRef<'_, Arc<AppState>>,
+    Query(params): Query<ValidateParams>,
+    Json(request): Json<ValidateRequest>,
+    req: &WebRequest<()>,
+    remote_addr: SocketAddr,
+) -> WebResponse {
+    let country = normalize_country(Some(&request.country));
+    let Some(country) = country else {
+        return validation_error(
+            "invalid_request",
+            "field `country` must be a two-letter country code",
+        );
+    };
+    if !state.indexes.has_country(&country) {
+        return validation_error(
+            "invalid_country",
+            &format!("country `{country}` is not indexed"),
+        );
+    }
+    if let Err(message) = validate_request_fields(&request) {
+        return validation_error("invalid_request", &message);
+    }
+    if let Err(error) = state
+        .auth
+        .authorize(req, remote_addr, params.api_key.as_deref())
+        .await
+    {
+        return json_error(error_status(&error), error);
+    }
+
+    let query = validation_query_text(&request);
+    let index = Arc::clone(
+        state
+            .indexes
+            .by_country
+            .get(&country)
+            .expect("indexed country was checked"),
+    );
+    let candidates =
+        match validation_candidates_async(index, query, VALIDATION_CANDIDATE_LIMIT).await {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ErrorResponse {
+                        error: "validation_failed",
+                        message: format!("address validation failed: {error}"),
+                    },
+                );
+            }
+        };
+
+    let matches = ranked_validation_matches(&request, candidates);
+    let Some(best) = matches.first() else {
+        return json_ok(ValidationResponse {
+            valid: false,
+            confidence_ratio: 0.0,
+            corrected_address: None,
+            suggestions: Vec::new(),
+        });
+    };
+    let valid = address_matches_request(&request, &best.address);
+    let confidence_ratio = best.confidence_ratio;
+    let corrected_address = (!valid).then(|| best.address.clone());
+    let suggestions = if confidence_ratio < VALIDATION_SUGGESTION_THRESHOLD {
+        matches
+            .into_iter()
+            .take(VALIDATION_SUGGESTION_LIMIT)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    json_ok(ValidationResponse {
+        valid,
+        confidence_ratio,
+        corrected_address,
+        suggestions,
+    })
+}
+
+fn validation_error(error: &'static str, message: &str) -> WebResponse {
+    json_error(
+        StatusCode::BAD_REQUEST,
+        ErrorResponse {
+            error,
+            message: String::from(message),
+        },
+    )
+}
+
+fn validate_request_fields(request: &ValidateRequest) -> Result<(), String> {
+    for (name, value) in [
+        ("street", &request.street),
+        ("house_number", &request.house_number),
+        ("postal_code", &request.postal_code),
+        ("city", &request.city),
+    ] {
+        if value.trim().is_empty() {
+            return Err(format!("field `{name}` is required"));
+        }
+    }
+    Ok(())
+}
+
+fn validation_query_text(request: &ValidateRequest) -> String {
+    format!(
+        "{} {} {} {}",
+        request.street, request.house_number, request.postal_code, request.city
+    )
+}
+
+fn ranked_validation_matches(
+    request: &ValidateRequest,
+    candidates: Vec<SearchResult>,
+) -> Vec<ValidationMatch> {
+    let mut seen = BTreeSet::new();
+    let mut matches = candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            let address = candidate.address;
+            let dedup_key = format!("{}\u{0}{}", address.country_code, address.full_address);
+            seen.insert(dedup_key).then(|| ValidationMatch {
+                confidence_ratio: validation_confidence(request, &address),
+                address,
+            })
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| {
+        right
+            .confidence_ratio
+            .total_cmp(&left.confidence_ratio)
+            .then_with(|| left.address.full_address.cmp(&right.address.full_address))
+    });
+    matches
+}
+
+fn validation_confidence(request: &ValidateRequest, address: &StructuredAddress) -> f64 {
+    let street = text_similarity(&request.street, address.thoroughfare.as_deref());
+    let house_number = text_similarity(&request.house_number, address.premise.as_deref());
+    let postal_code = compact_similarity(&request.postal_code, address.postal_code.as_deref());
+    let city = text_similarity(&request.city, address.locality.as_deref());
+    0.45 * street + 0.20 * house_number + 0.20 * postal_code + 0.15 * city
+}
+
+fn address_matches_request(request: &ValidateRequest, address: &StructuredAddress) -> bool {
+    normalize_text(&request.street) == normalize_optional(address.thoroughfare.as_deref())
+        && normalize_text(&request.house_number) == normalize_optional(address.premise.as_deref())
+        && compact(&request.postal_code) == compact_optional(address.postal_code.as_deref())
+        && normalize_text(&request.city) == normalize_optional(address.locality.as_deref())
+}
+
+fn text_similarity(input: &str, candidate: Option<&str>) -> f64 {
+    let input = normalize_text(input);
+    let candidate = normalize_optional(candidate);
+    normalized_similarity(&input, &candidate)
+}
+
+fn compact_similarity(input: &str, candidate: Option<&str>) -> f64 {
+    normalized_similarity(&compact(input), &compact_optional(candidate))
+}
+
+fn normalize_optional(value: Option<&str>) -> String {
+    value.map(normalize_text).unwrap_or_default()
+}
+
+fn compact_optional(value: Option<&str>) -> String {
+    value.map(compact).unwrap_or_default()
+}
+
+fn compact(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .collect()
+}
+
+fn normalized_similarity(left: &str, right: &str) -> f64 {
+    if left.is_empty() || right.is_empty() {
+        return 0.0;
+    }
+    if left == right {
+        return 1.0;
+    }
+    let left = left.chars().collect::<Vec<_>>();
+    let right = right.chars().collect::<Vec<_>>();
+    let max_len = left.len().max(right.len());
+    let mut previous = (0..=right.len()).collect::<Vec<_>>();
+    for (left_index, left_character) in left.iter().enumerate() {
+        let mut current = vec![left_index + 1];
+        for (right_index, right_character) in right.iter().enumerate() {
+            let substitution =
+                previous[right_index] + usize::from(left_character != right_character);
+            let insertion = current[right_index] + 1;
+            let deletion = previous[right_index + 1] + 1;
+            current.push(substitution.min(insertion).min(deletion));
+        }
+        previous = current;
+    }
+    1.0 - (previous[right.len()] as f64 / max_len as f64)
+}
+
 fn normalize_country(country: Option<&str>) -> Option<String> {
     country
         .map(str::trim)
@@ -603,7 +840,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{AppState, admin_home, health, home, is_street_only, normalize_country, search};
+    use super::{
+        AppState, ValidateRequest, address_matches_request, admin_home, health, home,
+        is_street_only, normalize_country, ranked_validation_matches, search,
+        validation_candidates_async,
+    };
     use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::Arc;
@@ -684,6 +925,59 @@ mod tests {
                 .as_str()
                 .is_some_and(|address| address.starts_with("Hlavna "))
         );
+    }
+
+    #[tokio::test]
+    async fn validation_finds_an_exact_structured_address() {
+        let indexes = test_indexes().expect("test index");
+        let index = Arc::clone(indexes.by_country.get("SK").expect("SK index"));
+        let request = ValidateRequest {
+            street: String::from("Hlavna"),
+            house_number: String::from("68"),
+            postal_code: String::from("040 01"),
+            city: String::from("Kosice"),
+            country: String::from("SK"),
+        };
+
+        let candidates = validation_candidates_async(
+            index,
+            super::validation_query_text(&request),
+            super::VALIDATION_CANDIDATE_LIMIT,
+        )
+        .await
+        .expect("validation candidates");
+        let matches = ranked_validation_matches(&request, candidates);
+        let best = matches.first().expect("matching address");
+
+        assert!(address_matches_request(&request, &best.address));
+        assert_eq!(best.confidence_ratio, 1.0);
+    }
+
+    #[tokio::test]
+    async fn validation_corrects_a_wrong_postal_code_and_suggests_matches() {
+        let indexes = test_indexes().expect("test index");
+        let index = Arc::clone(indexes.by_country.get("SK").expect("SK index"));
+        let request = ValidateRequest {
+            street: String::from("Hlavna"),
+            house_number: String::from("68"),
+            postal_code: String::from("999 99"),
+            city: String::from("Kosice"),
+            country: String::from("SK"),
+        };
+
+        let candidates = validation_candidates_async(
+            index,
+            super::validation_query_text(&request),
+            super::VALIDATION_CANDIDATE_LIMIT,
+        )
+        .await
+        .expect("validation candidates");
+        let matches = ranked_validation_matches(&request, candidates);
+        let best = matches.first().expect("matching address");
+
+        assert!(!address_matches_request(&request, &best.address));
+        assert_eq!(best.address.postal_code.as_deref(), Some("040 01"));
+        assert!(best.confidence_ratio < super::VALIDATION_SUGGESTION_THRESHOLD);
     }
 
     #[tokio::test]
@@ -792,6 +1086,10 @@ mod tests {
         assert!(body.contains("`${selectedStreet} `"));
         assert!(body.contains("fillStructuredFields(result)"));
         assert!(body.contains("latestResultsAreStreetOnly && !hasHouseNumber"));
+        assert!(body.contains("Validate an address"));
+        assert!(body.contains("id=\"validation-form\""));
+        assert!(body.contains("/validate?${params.toString()}"));
+        assert!(body.contains("confidence_ratio"));
     }
 
     #[tokio::test]

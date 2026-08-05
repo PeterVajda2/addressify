@@ -94,6 +94,12 @@ The autocomplete endpoints `/search` and `/suggest` now require:
 - `api_key` query parameter
 - `Origin` or `Referer` header whose host matches a row in `api_key_domains`
 
+`POST /validate?api_key=...` uses the same authorization and accepts JSON with
+`street`, `house_number`, `postal_code`, `city`, and a two-letter `country`.
+It returns `valid`, a `confidence_ratio` from `0.0` to `1.0`, and the best
+canonical `corrected_address` when the supplied address differs. When the best
+match is below `0.90`, it also returns up to five ranked `suggestions`.
+
 Seed one key and one allowed domain:
 
 ```sql
