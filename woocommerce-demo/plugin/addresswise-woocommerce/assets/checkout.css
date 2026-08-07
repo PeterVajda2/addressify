@@ -1,0 +1,5 @@
+.addresswise-suggestions { position: relative; z-index: 20; margin-top: 4px; border: 1px solid #d7d7d7; border-radius: 4px; background: #fff; box-shadow: 0 6px 18px rgba(0,0,0,.12); }
+.addresswise-suggestions ul { margin: 0; padding: 0; list-style: none; }
+.addresswise-suggestions li + li { border-top: 1px solid #eee; }
+.addresswise-suggestions button { width: 100%; padding: 10px 12px; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.addresswise-suggestions button:hover, .addresswise-suggestions button:focus { background: #f5f5f5; }
