@@ -587,7 +587,7 @@ async fn validate(
     }
     if let Err(error) = state
         .auth
-        .authorize(req, remote_addr, params.api_key.as_deref())
+        .authorize_without_domain(req, remote_addr, params.api_key.as_deref())
         .await
     {
         return json_error(error_status(&error), error);

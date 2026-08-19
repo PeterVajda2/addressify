@@ -1,10 +1,10 @@
 # Addresswise project and operations
 
-Addresswise is a Rust/Tantivy address-autocomplete API. It loads per-country
-Tantivy indexes built from PostgreSQL, currently serves `CZ` and `SK`, and
-exposes `/search` and `/suggest` (plus `/health`). The optional bare
-`street_only` query flag returns distinct street names. API-key/domain
-authorization and usage tracking are backed by PostgreSQL.
+Addresswise is a Rust/Tantivy address-autocomplete and validation API. It
+loads per-country Tantivy indexes built from PostgreSQL, currently serves `CZ`
+and `SK`, and exposes `/search`, `/suggest`, `/validate`, and `/health`. The
+optional bare `street_only` query flag returns distinct street names.
+API-key/domain authorization and usage tracking are backed by PostgreSQL.
 
 ## Local commands
 
@@ -19,6 +19,59 @@ authorization and usage tracking are backed by PostgreSQL.
   revision-stamped JSON, including per-prefix percentiles, to
   `benchmark-results/` unless `--results-dir ''` disables it.
 - `DEPLOY.md` documents runtime environment variables and API behavior.
+- `ETL.md` documents address ingestion entry points.
+
+## Execution modes & environment
+
+The main binary supports four modes: `serve`, `build-indexes`, `migrate`, and `dev`.
+
+### Required environment variables
+- `COUNTRY_CODES`: Active country codes (e.g. `CZ,SK`).
+- `INDEX_DIR`: Directory where Tantivy indexes live (e.g. `/opt/addresswise/data/indexes`).
+- `DATABASE_URL`: PostgreSQL connection string (`postgres://user:pass@host:port/dbname`).
+
+### Optional environment variables
+- `HOST`: Bind IP address (default: `127.0.0.1`). Binds both TCP and UDP for HTTP/3 support.
+- `PORT`: Bind port (default: `8080`).
+- `PSQL_BIN`: Path to `psql` binary (default: `psql`).
+- `INDEX_LIMIT`: Row limit during index builds for testing.
+- `ADMIN_API_KEY`: Long private secret required to enable `/admin` management endpoints and web UI (passed via `X-Admin-Key` header). Keep only in `/etc/addresswise.env`.
+
+## API authorization & usage tracking
+
+- The `/search` and `/suggest` endpoints require an `api_key` query parameter and a matching `Origin` or `Referer` domain in `api_key_domains`.
+- The `/validate` endpoint requires only a valid active `api_key`; it does not enforce request-domain matching.
+- Usage is tracked per key in `api_keys.total_requests` and `api_key_usage_daily`.
+- `/admin` is a web dashboard for managing API keys, domains, activation status, and usage.
+
+## ETL ingestion tools
+
+All ETL tools write normalized records into the `addresses` PostgreSQL table defined in `db/0001_address_matching.sql`.
+
+- **Binaries**: `etl_geojson`, `etl_be_csv`, `etl_hu_xlsx`.
+- **Scripts**:
+  - `scripts/etl_geojson.sh`: Import GeoJSON address datasets.
+  - `scripts/etl_be_csv.sh`: Import Belgium address CSV dataset.
+  - `scripts/etl_hu_xlsx.sh`: Import Hungary address XLSX dataset.
+  - `scripts/etl_osm_pbf.sh`: Stream address-tagged OSM PBF objects through a FIFO into `etl_geojson`. Requires locality resolution (`OSM_REQUIRE_LOCALITY=true`).
+
+## Local WooCommerce plugin demo
+
+The isolated WordPress/WooCommerce demo is in `woocommerce-demo/` and uses
+rootless Podman. Run `woocommerce-demo/bootstrap.sh` to start or reproduce it;
+the store is `http://localhost:8088` and its local-only administrator is
+`admin` / `local-demo-password`. Stop it with `podman-compose down` from that
+directory (add `--volumes` only when deliberately deleting its local data).
+
+The sellable extension source is
+`woocommerce-demo/plugin/addresswise-woocommerce/`. It proxies checkout search
+requests through a nonce-protected WordPress REST route, keeping the
+Addresswise API key server-side. Configure its API URL/key under **WooCommerce
+→ Addresswise**, and authorize the store domain for that key; `localhost` must
+be allowed for the local demo. The current version supports the classic
+WooCommerce checkout's billing and shipping fields only. Build an uploadable
+ZIP with `woocommerce-demo/package-plugin.sh`; its output is intentionally
+ignored under `woocommerce-demo/dist/`.
 
 ## Production deployment
 

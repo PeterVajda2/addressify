@@ -14,6 +14,7 @@ use xitca_web::http::{StatusCode, WebRequest, header};
 const MIGRATIONS_DIR: &str = "db";
 const AUTH_CACHE_TTL: Duration = Duration::from_secs(30);
 const USAGE_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
+const DIRECT_REQUEST_DOMAIN: &str = "";
 
 #[derive(Clone)]
 pub enum AuthState {
@@ -69,7 +70,24 @@ impl AuthState {
         api_key: Option<&str>,
     ) -> Result<(), ErrorResponse> {
         match self {
-            Self::Enabled(service) => authorize_request(service, req, remote_addr, api_key).await,
+            Self::Enabled(service) => {
+                authorize_request(service, req, remote_addr, api_key, true).await
+            }
+            #[cfg(test)]
+            Self::Disabled => Ok(()),
+        }
+    }
+
+    pub async fn authorize_without_domain(
+        &self,
+        req: &WebRequest<()>,
+        remote_addr: SocketAddr,
+        api_key: Option<&str>,
+    ) -> Result<(), ErrorResponse> {
+        match self {
+            Self::Enabled(service) => {
+                authorize_request(service, req, remote_addr, api_key, false).await
+            }
             #[cfg(test)]
             Self::Disabled => Ok(()),
         }
@@ -104,6 +122,7 @@ async fn authorize_request(
     req: &WebRequest<()>,
     remote_addr: SocketAddr,
     api_key: Option<&str>,
+    require_domain: bool,
 ) -> Result<(), ErrorResponse> {
     let api_key = api_key
         .map(str::trim)
@@ -113,13 +132,10 @@ async fn authorize_request(
             message: String::from("query parameter `api_key` is required"),
         })?;
 
-    let request_domain = extract_request_domain(req).ok_or_else(|| ErrorResponse {
-        error: "missing_origin",
-        message: String::from("request must include an Origin or Referer header"),
-    })?;
+    let request_domain = request_domain_for_authorization(req, require_domain)?;
 
     let cache_key = (api_key.to_owned(), request_domain.clone());
-    let api_key_id = cached_api_key_id(service, &cache_key).await?;
+    let api_key_id = cached_api_key_id(service, &cache_key, require_domain).await?;
     queue_usage(
         service,
         api_key_id,
@@ -133,6 +149,7 @@ async fn authorize_request(
 async fn cached_api_key_id(
     service: &AuthService,
     cache_key: &(String, String),
+    require_domain: bool,
 ) -> Result<i64, ErrorResponse> {
     if let Some(cached) = service
         .authorized_keys
@@ -162,24 +179,26 @@ async fn cached_api_key_id(
     };
 
     let api_key_id: i64 = api_key_row.get("id");
-    let allowed = sqlx::query_scalar::<_, bool>(
-        "select exists(
-            select 1
-            from api_key_domains
-            where api_key_id = $1 and domain = $2
-        )",
-    )
-    .bind(api_key_id)
-    .bind(&cache_key.1)
-    .fetch_one(&service.pool)
-    .await
-    .map_err(internal_error)?;
+    if require_domain {
+        let allowed = sqlx::query_scalar::<_, bool>(
+            "select exists(
+                select 1
+                from api_key_domains
+                where api_key_id = $1 and domain = $2
+            )",
+        )
+        .bind(api_key_id)
+        .bind(&cache_key.1)
+        .fetch_one(&service.pool)
+        .await
+        .map_err(internal_error)?;
 
-    if !allowed {
-        return Err(ErrorResponse {
-            error: "domain_not_allowed",
-            message: format!("API key is not allowed for domain `{}`", cache_key.1),
-        });
+        if !allowed {
+            return Err(ErrorResponse {
+                error: "domain_not_allowed",
+                message: format!("API key is not allowed for domain `{}`", cache_key.1),
+            });
+        }
     }
 
     service
@@ -194,6 +213,20 @@ async fn cached_api_key_id(
             },
         );
     Ok(api_key_id)
+}
+
+fn request_domain_for_authorization(
+    req: &WebRequest<()>,
+    require_domain: bool,
+) -> Result<String, ErrorResponse> {
+    match extract_request_domain(req) {
+        Some(domain) => Ok(domain),
+        None if require_domain => Err(ErrorResponse {
+            error: "missing_origin",
+            message: String::from("request must include an Origin or Referer header"),
+        }),
+        None => Ok(String::from(DIRECT_REQUEST_DOMAIN)),
+    }
 }
 
 fn queue_usage(service: &AuthService, api_key_id: i64, domain: String, ip: String) {
