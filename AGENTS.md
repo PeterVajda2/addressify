@@ -12,7 +12,9 @@ API-key/domain authorization and usage tracking are backed by PostgreSQL.
 - `scripts/check.sh` runs formatting, Clippy with warnings denied, tests, and a
   release build; run it before committing a code change.
 - `cargo build --release` builds `target/release/addresswise`.
-- The binary commands are `serve`, `build-indexes`, `migrate`, and `dev`.
+- The binary commands are `serve`, `build-indexes`, `migrate`, and `dev`. ETL
+  binaries include `etl_geojson`, `etl_be_csv`, `etl_hu_xlsx`, and
+  `etl_no_csv`.
 - `scripts/public_benchmark.py` fails on HTTP errors. Supply its API key through
   `ADDRESSWISE_BENCHMARK_API_KEY`; use `--street-only --all-countries` to
   reproduce the API's cross-country autocomplete path. Each run writes
@@ -48,11 +50,14 @@ The main binary supports four modes: `serve`, `build-indexes`, `migrate`, and `d
 
 All ETL tools write normalized records into the `addresses` PostgreSQL table defined in `db/0001_address_matching.sql`.
 
-- **Binaries**: `etl_geojson`, `etl_be_csv`, `etl_hu_xlsx`.
+- **Binaries**: `etl_geojson`, `etl_be_csv`, `etl_hu_xlsx`, `etl_no_csv`.
 - **Scripts**:
   - `scripts/etl_geojson.sh`: Import GeoJSON address datasets.
   - `scripts/etl_be_csv.sh`: Import Belgium address CSV dataset.
   - `scripts/etl_hu_xlsx.sh`: Import Hungary address XLSX dataset.
+  - `scripts/etl_no_csv.sh`: Import the Norwegian matrikkel CSV. By default it
+    loads only `vegadresse` rows; pass `--include-matrikkel` to also ingest
+    cadastral-only `matrikkeladresse` rows.
   - `scripts/etl_osm_pbf.sh`: Stream address-tagged OSM PBF objects through a FIFO into `etl_geojson`. Requires locality resolution (`OSM_REQUIRE_LOCALITY=true`).
 
 ## Local WooCommerce plugin demo

@@ -7,12 +7,14 @@ Available binaries:
 - `etl_geojson`
 - `etl_be_csv`
 - `etl_hu_xlsx`
+- `etl_no_csv`
 
 Helper scripts:
 
 - `scripts/etl_geojson.sh`
 - `scripts/etl_be_csv.sh`
 - `scripts/etl_hu_xlsx.sh`
+- `scripts/etl_no_csv.sh`
 - `scripts/etl_osm_pbf.sh`
 
 All ETL tools write into the `addresses` table defined in:
@@ -35,6 +37,23 @@ cargo run --release --bin etl_be_csv -- --input ./address_data/BE_source.csv
 DATABASE_URL=postgres://address:address@127.0.0.1:5432/address_wise \
 cargo run --release --bin etl_hu_xlsx -- --input ./address_data/HU_data.xlsx
 ```
+
+```bash
+DATABASE_URL=postgres://address:address@127.0.0.1:5432/address_wise \
+cargo run --release --bin etl_no_csv -- --input ./norway_data/matrikkelenAdresse.csv
+```
+
+## Norway CSV imports
+
+`etl_no_csv` imports the Norwegian matrikkel address CSV. By default it imports
+only `vegadresse` rows, which are normal street addresses suitable for
+autocomplete. Pass `--include-matrikkel` to also ingest `matrikkeladresse`
+rows, which are cadastral-only addresses and may have no street name.
+
+The importer reads semicolon-delimited CSV with the source headers from
+`matrikkelenAdresse.csv`, converts projected `EPSG:258xx` coordinates to WGS84
+latitude/longitude, normalizes uppercase locality/admin names for display, and
+stores country code `NO`.
 
 ## OSM PBF imports
 
