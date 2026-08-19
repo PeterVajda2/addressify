@@ -119,6 +119,20 @@ Confirm `systemctl is-active addresswise` is `active` and
 `curl --fail http://127.0.0.1:8080/health` succeeds before reporting
 completion.
 
+Completed 2026-08-19: production imported Norway from
+`matrikkelenAdresse.csv` with `2,567,025` inserted `vegadresse` rows and
+`34,918` skipped `matrikkeladresse` rows. A subsequent
+`scripts/deploy_production.sh --rebuild-indexes` rollout rebuilt and activated
+the country set `AT,CH,CZ,DE,DK,EE,ES,FR,HU,LT,LU,LV,NL,NO,PT,SK`; confirmable
+via `/health`.
+
+Operational note: `scripts/deploy_production.sh --rebuild-indexes` currently
+rebuilds every active country returned from the production database, even when
+only one new country was imported. Faster country onboarding would require a
+separate targeted index-build/cutover path that builds only the new country's
+`<cc>` and `<cc>_streets` indexes and then updates `COUNTRY_CODES` during the
+service restart.
+
 For OSM PBF address replacement imports, production has `osmium-tool` and
 `jq` installed. Use `scripts/etl_osm_pbf.sh`; it streams tagged OSM addresses
 through a FIFO and does not create a large GeoJSON intermediate file. The
