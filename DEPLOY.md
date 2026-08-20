@@ -40,8 +40,13 @@ Optional:
 Production index rebuilds (`scripts/deploy_production.sh --rebuild-indexes`) derive
 `COUNTRY_CODES` from every active, valid two-letter country code in the database.
 They also install a systemd drop-in with that same list, so `serve` loads all of
-the rebuilt country indexes. Run this deployment mode again after importing a new
-country.
+the rebuilt country indexes.
+
+For adding countries, use
+`scripts/deploy_production.sh --add-countries BG,FI,HR,RS,SI` after importing
+those countries into the production database. This mode hard-links the existing
+index tree, rebuilds only the requested country and street indexes, and atomically
+cuts over the merged tree. Existing country indexes are not rebuilt.
 
 ## Build and run
 
