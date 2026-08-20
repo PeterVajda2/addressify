@@ -287,7 +287,11 @@ fn search_tantivy(
     fields: IndexFields,
     limit: usize,
 ) -> tantivy::Result<Vec<SearchResult>> {
-    let top_docs = searcher.search(query, &TopDocs::with_limit(limit).order_by_score())?;
+    let candidate_limit = limit.saturating_mul(4).max(limit);
+    let top_docs = searcher.search(
+        query,
+        &TopDocs::with_limit(candidate_limit).order_by_score(),
+    )?;
     let mut results = Vec::with_capacity(top_docs.len());
 
     for (score, doc_address) in top_docs {
@@ -304,7 +308,21 @@ fn search_tantivy(
         });
     }
 
-    Ok(results)
+    Ok(deduplicate_search_results(results, limit))
+}
+
+fn deduplicate_search_results(results: Vec<SearchResult>, limit: usize) -> Vec<SearchResult> {
+    let mut seen = HashSet::new();
+    results
+        .into_iter()
+        .filter(|result| {
+            seen.insert((
+                result.country_code.clone(),
+                normalize_text(&result.address.full_address),
+            ))
+        })
+        .take(limit)
+        .collect()
 }
 
 fn search_tantivy_streets(
@@ -410,13 +428,51 @@ mod tests {
     use tantivy::schema::{Field, TantivyDocument};
     use tantivy::{Index, ReloadPolicy};
 
-    use super::{AddressIndex, IndexStorage};
+    use super::{AddressIndex, IndexStorage, deduplicate_search_results};
     use crate::indexing::address_schema;
+    use crate::models::{SearchResult, StructuredAddress};
     use crate::normalize::normalize_text;
 
     #[test]
     fn normalize_query_folds_accents_and_symbols() {
         assert_eq!(normalize_text("Banská-Bystrica 15"), "banska bystrica 15");
+    }
+
+    #[test]
+    fn address_search_deduplicates_normalized_full_addresses() {
+        let address = |country_code: &str, full_address: &str| SearchResult {
+            formatted: full_address.to_string(),
+            score: 1.0,
+            country_code: country_code.to_string(),
+            address: StructuredAddress {
+                country_code: country_code.to_string(),
+                admin_area: None,
+                locality: None,
+                dependent_locality: None,
+                thoroughfare: None,
+                premise: None,
+                premise_type: None,
+                subpremise: None,
+                postal_code: None,
+                full_address: full_address.to_string(),
+            },
+        };
+
+        let results = deduplicate_search_results(
+            vec![
+                address("DE", "In den Kolonnaden 1, Bad Nauheim, 61231, DE"),
+                address("DE", "In den Kolonnaden 1, Bad Nauheim, 61231, DE"),
+                address("DE", "In den Kolonnaden 17, Bad Nauheim, 61231, DE"),
+            ],
+            10,
+        );
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].address.premise, None);
+        assert_eq!(
+            results[1].formatted,
+            "In den Kolonnaden 17, Bad Nauheim, 61231, DE"
+        );
     }
 
     #[test]
