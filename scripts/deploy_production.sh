@@ -31,7 +31,8 @@ cargo build --release
 next_binary="$runtime_dir/addresswise.next.$$.bin"
 scp target/release/addresswise "$remote_host:$next_binary"
 
-ssh "$remote_host" bash -s -- "$runtime_dir" "$source_dir" "$index_mode" "$requested_countries" "$next_binary" <<'REMOTE_SCRIPT'
+requested_countries_arg="${requested_countries:--}"
+ssh "$remote_host" bash -s -- "$runtime_dir" "$source_dir" "$index_mode" "$requested_countries_arg" "$next_binary" <<'REMOTE_SCRIPT'
 set -euo pipefail
 
 runtime_dir="$1"
