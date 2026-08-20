@@ -126,12 +126,19 @@ Completed 2026-08-19: production imported Norway from
 the country set `AT,CH,CZ,DE,DK,EE,ES,FR,HU,LT,LU,LV,NL,NO,PT,SK`; confirmable
 via `/health`.
 
-Operational note: `scripts/deploy_production.sh --rebuild-indexes` currently
-rebuilds every active country returned from the production database, even when
-only one new country was imported. Faster country onboarding would require a
-separate targeted index-build/cutover path that builds only the new country's
-`<cc>` and `<cc>_streets` indexes and then updates `COUNTRY_CODES` during the
-service restart.
+Operational note: `scripts/deploy_production.sh --rebuild-indexes` rebuilds every
+active country returned from the production database. For onboarding or replacing
+specific countries, use `scripts/deploy_production.sh --add-countries CC,...`;
+it hard-links the existing index tree, builds only the requested `<cc>` and
+`<cc>_streets` directories, then atomically swaps the merged tree and updates
+`COUNTRY_CODES` during the service restart.
+
+Completed 2026-08-20: production imported BG (`3,048,259`), FI (`3,850,211`),
+HR (`1,681,530`), RS (`2,724,376`), and SI (`573,634`) active address rows
+from the streamed GeoJSON sources, with zero skipped JSON or invalid rows. The
+five country and five street indexes were added with
+`scripts/deploy_production.sh --add-countries BG,FI,HR,RS,SI`; production
+health confirmed all 21 countries active.
 
 For OSM PBF address replacement imports, production has `osmium-tool` and
 `jq` installed. Use `scripts/etl_osm_pbf.sh`; it streams tagged OSM addresses
