@@ -273,7 +273,14 @@
       <div class="brand-mark" aria-hidden="true">⌖</div>
       <p class="eyebrow">addresswise</p>
       <h1>A little help finding your way</h1>
-      <p class="intro">Start with a street, then choose the address that feels right. We’ll fill in the details for you.</p>
+      <p class="intro" id="search-intro">Start with a street, or switch to postal code first when that is more convenient.</p>
+      <div class="field demo-mode">
+        <label for="search-mode">Search flow</label>
+        <select id="search-mode">
+          <option value="street-first" selected>Street first</option>
+          <option value="postal-first">Postal code first</option>
+        </select>
+      </div>
     </header>
     <form id="search-form" aria-label="Address lookup">
         <div class="field">
@@ -281,6 +288,7 @@
           <select id="country-input" name="country" required>
             <option value="" selected disabled>Select a country</option>
             <option value="AT">Austria</option>
+            <option value="BE">Belgium</option>
             <option value="BG">Bulgaria</option>
             <option value="CZ">Czechia</option>
             <option value="DK">Denmark</option>
@@ -288,13 +296,17 @@
             <option value="FI">Finland</option>
             <option value="FR">France</option>
             <option value="DE">Germany</option>
+            <option value="GB">Great Britain</option>
             <option value="HR">Croatia</option>
             <option value="HU">Hungary</option>
+            <option value="IE">Ireland</option>
+            <option value="IT">Italy</option>
             <option value="LV">Latvia</option>
             <option value="LT">Lithuania</option>
             <option value="LU">Luxembourg</option>
             <option value="NL">Netherlands</option>
             <option value="NO">Norway</option>
+            <option value="PL">Poland</option>
             <option value="PT">Portugal</option>
             <option value="RS">Serbia</option>
             <option value="SK">Slovakia</option>
@@ -305,7 +317,7 @@
         </div>
         <div class="field field-street">
           <label for="street-input">Street &amp; house number</label>
-          <input id="street-input" name="q" type="text" placeholder="Select a country first" autocomplete="street-address" spellcheck="false" disabled>
+          <input id="street-input" name="q" type="text" placeholder="Select a postal code first" autocomplete="street-address" spellcheck="false" disabled>
           <section class="panel" aria-label="Suggestions">
             <ul class="suggestions" id="results"></ul>
           </section>
@@ -316,9 +328,9 @@
           <label for="city-input">City</label>
           <input id="city-input" name="city" type="text" readonly>
         </div>
-        <div class="field">
+        <div class="field field-postal">
           <label for="postal-code-input">Postal code</label>
-          <input id="postal-code-input" name="postal_code" type="text" readonly>
+          <input id="postal-code-input" name="postal_code" type="text" placeholder="Select a country first" autocomplete="postal-code" spellcheck="false" disabled>
         </div>
       </div>
     </form>
@@ -331,6 +343,7 @@
           <select id="validation-country" name="country" required>
             <option value="" selected disabled>Select a country</option>
             <option value="AT">Austria</option>
+            <option value="BE">Belgium</option>
             <option value="BG">Bulgaria</option>
             <option value="CZ">Czechia</option>
             <option value="DK">Denmark</option>
@@ -338,13 +351,17 @@
             <option value="FI">Finland</option>
             <option value="FR">France</option>
             <option value="DE">Germany</option>
+            <option value="GB">Great Britain</option>
             <option value="HR">Croatia</option>
             <option value="HU">Hungary</option>
+            <option value="IE">Ireland</option>
+            <option value="IT">Italy</option>
             <option value="LV">Latvia</option>
             <option value="LT">Lithuania</option>
             <option value="LU">Luxembourg</option>
             <option value="NL">Netherlands</option>
             <option value="NO">Norway</option>
+            <option value="PL">Poland</option>
             <option value="PT">Portugal</option>
             <option value="RS">Serbia</option>
             <option value="SK">Slovakia</option>
@@ -379,6 +396,8 @@
   <script>
     const form = document.getElementById("search-form");
     const countryInput = document.getElementById("country-input");
+    const searchModeInput = document.getElementById("search-mode");
+    const searchIntro = document.getElementById("search-intro");
     const streetInput = document.getElementById("street-input");
     const cityInput = document.getElementById("city-input");
     const postalCodeInput = document.getElementById("postal-code-input");
@@ -404,10 +423,13 @@
     let requestSequence = 0;
     let latestResults = [];
     let latestResultsAreStreetOnly = false;
+    let latestResultsArePostalOnly = false;
+    let selectedPostalCode = "";
+    let postalFirst = false;
     let selectedStreet = "";
     let validationController = null;
 
-    async function runSearch(query, country, streetOnly) {
+    async function runSearch(query, country, streetOnly, postalOnly, postalCode) {
       if (activeController) {
         activeController.abort();
       }
@@ -416,11 +438,13 @@
       const params = new URLSearchParams({
         q: query,
         country,
-        limit: "10",
+        limit: "50",
         api_key: demoApiKey,
       });
       const streetOnlyFlag = streetOnly ? "&street_only" : "";
-      const response = await fetch(`${apiBaseUrl}/search?${params.toString()}${streetOnlyFlag}`, {
+      const postalOnlyFlag = postalOnly ? "&postal_only" : "";
+      if (postalCode) params.set("postal_code", postalCode);
+      const response = await fetch(`${apiBaseUrl}/search?${params.toString()}${streetOnlyFlag}${postalOnlyFlag}`, {
         method: "GET",
         cache: "no-store",
         credentials: "same-origin",
@@ -455,9 +479,9 @@
       postalCodeInput.value = address.postal_code || "";
     }
 
-    function clearStructuredFields() {
+    function clearStructuredFields(preservePostal = false) {
       cityInput.value = "";
-      postalCodeInput.value = "";
+      if (!preservePostal) postalCodeInput.value = "";
     }
 
     function focusStreetInputAtEnd() {
@@ -469,6 +493,7 @@
     function clearSuggestions() {
       latestResults = [];
       latestResultsAreStreetOnly = false;
+      latestResultsArePostalOnly = false;
       results.innerHTML = "";
       panel.classList.remove("visible");
     }
@@ -503,19 +528,28 @@
       return body;
     }
 
-    function renderResults(payload, streetOnly) {
-      latestResults = payload.results;
+    function renderResults(payload, streetOnly, postalOnly) {
+      const addressResults = payload.results.filter((result) =>
+        Boolean(buildHouseNumber(result.address)),
+      );
+      const visibleResults = !postalOnly && !streetOnly && addressResults.length
+        ? addressResults
+        : payload.results;
+      latestResults = visibleResults;
       latestResultsAreStreetOnly = streetOnly;
-      if (!payload.results.length) {
+      latestResultsArePostalOnly = postalOnly;
+      if (!visibleResults.length) {
         panel.classList.remove("visible");
         results.innerHTML = "";
         return;
       }
 
       panel.classList.add("visible");
-      results.innerHTML = payload.results
+      results.innerHTML = visibleResults
         .map((result, index) => {
-          const street = buildStreetLine(result.address) || result.address.full_address;
+          const street = postalOnly
+            ? (result.address.postal_code || result.address.full_address)
+            : (buildStreetLine(result.address) || result.address.full_address);
           const locality = [
             result.address.locality || result.address.dependent_locality || "",
             result.address.postal_code || "",
@@ -528,22 +562,9 @@
         .join("");
     }
 
-    function streetOnlyFor(query) {
-      if (!selectedStreet) {
-        return true;
-      }
-
-      if (query.startsWith(`${selectedStreet} `)) {
-        return false;
-      }
-
-      selectedStreet = "";
-      return true;
-    }
-
-    async function triggerSearch(query) {
+    async function triggerSearch(query, postalOnly = false) {
       const country = countryInput.value;
-      if (!country) {
+      if (!country || (!postalOnly && postalFirst && !selectedPostalCode)) {
         return;
       }
       if (!query) {
@@ -551,6 +572,7 @@
           activeController.abort();
           activeController = null;
         }
+        if (postalOnly) selectedPostalCode = "";
         selectedStreet = "";
         clearSuggestions();
         clearStructuredFields();
@@ -558,12 +580,12 @@
       }
 
       const currentRequest = ++requestSequence;
-      const streetOnly = streetOnlyFor(query);
+      const streetOnly = !postalOnly && !/\d/.test(query);
 
       try {
-        const payload = await runSearch(query, country, streetOnly);
+        const payload = await runSearch(query, country, streetOnly, postalOnly, selectedPostalCode);
         if (currentRequest === requestSequence) {
-          renderResults(payload, streetOnly);
+          renderResults(payload, streetOnly, postalOnly);
         }
       } catch (error) {
         if (error.name === "AbortError") {
@@ -625,8 +647,16 @@
     });
 
     streetInput.addEventListener("input", () => {
-      clearStructuredFields();
+      cityInput.value = "";
       scheduleSearch();
+    });
+
+    postalCodeInput.addEventListener("input", () => {
+      if (!postalFirst) return;
+      selectedPostalCode = "";
+      streetInput.disabled = true;
+      cityInput.value = "";
+      schedulePostalSearch();
     });
 
     countryInput.addEventListener("change", () => {
@@ -640,14 +670,25 @@
       }
       ++requestSequence;
       selectedStreet = "";
+      selectedPostalCode = "";
       streetInput.value = "";
-      streetInput.disabled = !countryInput.value;
-      streetInput.placeholder = countryInput.value ? "Type a street or address" : "Select a country first";
+      postalCodeInput.value = "";
+      postalCodeInput.disabled = !countryInput.value || !postalFirst;
+      streetInput.disabled = !countryInput.value || postalFirst;
+      streetInput.placeholder = postalFirst ? "Select a postal code first" : "Type a street or address";
       clearSuggestions();
       clearStructuredFields();
       if (countryInput.value) {
-        streetInput.focus();
+        (postalFirst ? postalCodeInput : streetInput).focus();
       }
+    });
+
+    searchModeInput.addEventListener("change", () => {
+      postalFirst = searchModeInput.value === "postal-first";
+      searchIntro.textContent = postalFirst
+        ? "Choose a postal code first, then select a street and house number."
+        : "Start with a street, then select the address that feels right.";
+      countryInput.dispatchEvent(new Event("change"));
     });
 
     document.addEventListener("click", (event) => {
@@ -655,7 +696,7 @@
         return;
       }
 
-      if (!event.target.closest(".field-street")) {
+      if (!event.target.closest(".field-street") && !event.target.closest(".field-postal")) {
         clearSuggestions();
       }
     });
@@ -674,6 +715,19 @@
 
       event.stopPropagation();
 
+      if (latestResultsArePostalOnly) {
+        selectedPostalCode = result.address.postal_code || "";
+        postalCodeInput.value = selectedPostalCode;
+        postalCodeInput.disabled = false;
+        streetInput.disabled = !selectedPostalCode;
+        streetInput.placeholder = "Type a street or address";
+        streetInput.value = "";
+        clearStructuredFields(true);
+        clearSuggestions();
+        streetInput.focus();
+        return;
+      }
+
       const hasHouseNumber = Boolean(buildHouseNumber(result.address));
       if (latestResultsAreStreetOnly && !hasHouseNumber) {
         selectedStreet = result.address.thoroughfare || result.formatted;
@@ -686,6 +740,14 @@
       clearSuggestions();
       focusStreetInputAtEnd();
     });
+
+    function schedulePostalSearch() {
+      if (pendingTimer) clearTimeout(pendingTimer);
+      pendingTimer = setTimeout(() => {
+        pendingTimer = null;
+        void triggerSearch(postalCodeInput.value.trim(), true);
+      }, 120);
+    }
   </script>
 </body>
 </html>

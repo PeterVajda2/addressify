@@ -1,197 +1,179 @@
-# Addresswise project and operations
+# Addresswise agent guide
 
-Addresswise is a Rust/Tantivy address-autocomplete and validation API. It
-loads per-country Tantivy indexes built from PostgreSQL, currently serves `CZ`
-and `SK`, and exposes `/search`, `/suggest`, `/validate`, and `/health`. The
-optional bare `street_only` query flag returns distinct street names.
-API-key/domain authorization and usage tracking are backed by PostgreSQL.
+This is the repository-level operating guide for coding agents. Keep it short,
+concrete, and current. User and system instructions take precedence. For work
+in a deeper directory, check for a more-specific `AGENTS.md` or
+`AGENTS.override.md` before editing files.
 
-## Local commands
+## Project at a glance
 
-- `cargo test` verifies the Rust project.
-- `scripts/check.sh` runs formatting, Clippy with warnings denied, tests, and a
-  release build; run it before committing a code change.
-- `cargo build --release` builds `target/release/addresswise`.
-- The binary commands are `serve`, `build-indexes`, `migrate`, and `dev`. ETL
-  binaries include `etl_geojson`, `etl_be_csv`, `etl_hu_xlsx`, and
-  `etl_no_csv`.
-- `scripts/public_benchmark.py` fails on HTTP errors. Supply its API key through
-  `ADDRESSWISE_BENCHMARK_API_KEY`; use `--street-only --all-countries` to
-  reproduce the API's cross-country autocomplete path. Each run writes
-  revision-stamped JSON, including per-prefix percentiles, to
-  `benchmark-results/` unless `--results-dir ''` disables it.
-- `DEPLOY.md` documents runtime environment variables and API behavior.
-- `ETL.md` documents address ingestion entry points.
+Addresswise is a Rust HTTP API for address autocomplete and validation.
 
-## Execution modes & environment
+- HTTP implementation: `src/http.rs`, `src/main.rs`
+- Address model and display formatting: `src/models.rs`
+- Search and ranking: `src/search.rs`
+- Tantivy/PostgreSQL indexing: `src/indexing.rs`
+- Country-specific rules: `src/address_rules.rs`, `src/normalize.rs`
+- Database migrations: `db/`
+- Embedded demo and admin pages: `static/index.html`, `static/admin.html`
+- ETL binaries: `src/bin/etl_*.rs`
+- ETL documentation: `ETL.md`
+- Deployment documentation: `DEPLOY.md`
 
-The main binary supports four modes: `serve`, `build-indexes`, `migrate`, and `dev`.
+The application has one address and one street index per active country. The
+runtime index root contains `<cc>/`, `<cc>_streets/`, and
+`<cc>_postal_codes/` for each country. The
+database is the source of truth for address records; Tantivy is built from
+active database rows.
 
-### Required environment variables
-- `COUNTRY_CODES`: Active country codes (e.g. `CZ,SK`).
-- `INDEX_DIR`: Directory where Tantivy indexes live (e.g. `/opt/addresswise/data/indexes`).
-- `DATABASE_URL`: PostgreSQL connection string (`postgres://user:pass@host:port/dbname`).
+## Local development
 
-### Optional environment variables
-- `HOST`: Bind IP address (default: `127.0.0.1`). Binds both TCP and UDP for HTTP/3 support.
-- `PORT`: Bind port (default: `8080`).
-- `PSQL_BIN`: Path to `psql` binary (default: `psql`).
-- `INDEX_LIMIT`: Row limit during index builds for testing.
-- `ADMIN_API_KEY`: Long private secret required to enable `/admin` management endpoints and web UI (passed via `X-Admin-Key` header). Keep only in `/etc/addresswise.env`.
+Use the repository root as the working directory.
 
-## API authorization & usage tracking
+```sh
+cargo test
+scripts/check.sh
+cargo build --release
+```
 
-- The `/search` and `/suggest` endpoints require an `api_key` query parameter and a matching `Origin` or `Referer` domain in `api_key_domains`.
-- The `/validate` endpoint requires only a valid active `api_key`; it does not enforce request-domain matching.
-- Usage is tracked per key in `api_keys.total_requests` and `api_key_usage_daily`.
-- `/admin` is a web dashboard for managing API keys, domains, activation status, and usage.
+`scripts/check.sh` is the normal pre-commit verification: formatting, Clippy
+with warnings denied, tests, and a release build. Run narrower tests while
+iterating, but run the full check for a completed Rust change.
 
-## ETL ingestion tools
+The main binary modes are `serve`, `build-indexes`, `migrate`, and `dev`.
+ETL binaries are `etl_geojson`, `etl_be_csv`, `etl_hu_xlsx`, and `etl_no_csv`.
+Shell entry points are in `scripts/`.
 
-All ETL tools write normalized records into the `addresses` PostgreSQL table defined in `db/0001_address_matching.sql`.
+Runtime configuration uses `DATABASE_URL`, `COUNTRY_CODES`, and `INDEX_DIR`.
+`HOST`, `PORT`, `INDEX_LIMIT`, and `TOMTOM_API_KEY` are optional. Keep
+`ADMIN_API_KEY`, `TOMTOM_API_KEY`, and all database credentials outside the
+repository.
 
-- **Binaries**: `etl_geojson`, `etl_be_csv`, `etl_hu_xlsx`, `etl_no_csv`.
-- **Scripts**:
-  - `scripts/etl_geojson.sh`: Import GeoJSON address datasets.
-  - `scripts/etl_be_csv.sh`: Import Belgium address CSV dataset.
-  - `scripts/etl_hu_xlsx.sh`: Import Hungary address XLSX dataset.
-  - `scripts/etl_no_csv.sh`: Import the Norwegian matrikkel CSV. By default it
-    loads only `vegadresse` rows; pass `--include-matrikkel` to also ingest
-    cadastral-only `matrikkeladresse` rows.
-  - `scripts/etl_osm_pbf.sh`: Stream address-tagged OSM PBF objects through a FIFO into `etl_geojson`. Requires locality resolution (`OSM_REQUIRE_LOCALITY=true`).
+## Code and data conventions
 
-## Local WooCommerce plugin demo
+- Preserve Unicode address characters in canonical values. Search aliases may
+  use folded forms, but do not replace a country’s distinct letters in stored
+  or displayed address data.
+- Keep country-specific normalization exceptions in the address-rule layer,
+  not scattered through HTTP or indexing code.
+- Treat `source_hash` as source-object identity. PostgreSQL enforces
+  uniqueness on `(country_code, source_hash)`; do not change that key without
+  an explicit data-migration plan.
+- Preserve the distinction between address records and street suggestions.
+  Changes to street materialization or ranking affect every rebuilt country.
+- The demo HTML is compiled into the Rust binary with `include_str!`; a static
+  page change requires a release build and binary deployment.
+- Avoid unrelated formatting, dependency, schema, or production changes.
 
-The isolated WordPress/WooCommerce demo is in `woocommerce-demo/` and uses
-rootless Podman. Run `woocommerce-demo/bootstrap.sh` to start or reproduce it;
-the store is `http://localhost:8088` and its local-only administrator is
-`admin` / `local-demo-password`. Stop it with `podman-compose down` from that
-directory (add `--volumes` only when deliberately deleting its local data).
+## ETL safety
 
-The sellable extension source is
-`woocommerce-demo/plugin/addresswise-woocommerce/`. It proxies checkout search
-requests through a nonce-protected WordPress REST route, keeping the
-Addresswise API key server-side. Configure its API URL/key under **WooCommerce
-→ Addresswise**, and authorize the store domain for that key; `localhost` must
-be allowed for the local demo. The current version supports the classic
-WooCommerce checkout's billing and shipping fields only. Build an uploadable
-ZIP with `woocommerce-demo/package-plugin.sh`; its output is intentionally
-ignored under `woocommerce-demo/dist/`.
+Before importing a large source:
+
+1. Confirm the original source file and checksum.
+2. Count eligible records from the original source, not an interrupted
+   intermediate.
+3. Check disk space, available memory, and database capacity.
+4. Confirm the country code and source dataset name.
+5. Use a streaming path; do not materialize millions of address objects in a
+   single in-memory structure.
+
+For OSM PBF imports use `scripts/etl_osm_pbf.sh`. It streams GeoJSON through a
+FIFO and requires locality resolution by default (`OSM_REQUIRE_LOCALITY=true`).
+Do not import locality-less records without a verified enrichment step.
+
+Never use an interrupted or partial GeoJSON/PBF intermediate as the source of
+truth. If counts disagree, compare source-object IDs, unique source hashes,
+SQL active rows, and Tantivy counts as separate metrics.
+
+## Indexing rules
+
+Indexes are independent per country.
+
+- A database change limited to one country normally requires only that
+  country’s address and street indexes to be rebuilt.
+- Do not delete the entire index root for a country-specific change.
+- A full rebuild is required only when all index directories were deliberately
+  removed or a global indexing behavior change requires it.
+- Build into a sibling directory and atomically swap only affected country
+  directories whenever possible.
+- Verify `<cc>/`, `<cc>_streets/`, and `<cc>_postal_codes/` after a country rebuild.
 
 ## Production deployment
 
-After completing and verifying a production-facing change, deploy it unless the
-user explicitly asks not to. Commit the intended working-tree changes and push
-`master` to `origin` first.
+Production is:
 
-Production host: `peter@31.220.81.20`.
+- Host: `peter@31.220.81.20`
+- Source checkout: `/home/peter/addresswise-src`
+- Runtime bundle: `/home/peter/addresswise-deploy`
+- Binary: `/home/peter/addresswise-deploy/addresswise`
+- Indexes: `/home/peter/addresswise-deploy/data/indexes`
+- Service: `addresswise`
+- Health endpoint: `http://127.0.0.1:8080/health`
+- Secrets: `/etc/addresswise.env` on the host; never print them
 
-- The source checkout is `/home/peter/addresswise-src` (Git remote `origin`).
-- The running bundle is `/home/peter/addresswise-deploy`; it is **not** a Git
-  checkout.
-- Systemd unit: `addresswise`, working directory
-  `/home/peter/addresswise-deploy`, binary
-  `/home/peter/addresswise-deploy/addresswise`.
-- Runtime indexes live at `/home/peter/addresswise-deploy/data/indexes`.
-- Runtime secrets, including `DATABASE_URL`, are in `/etc/addresswise.env` and
-  must never be printed or committed.
-- `ADMIN_API_KEY` enables and protects `/admin` and its API key-management
-  endpoints; keep it only in `/etc/addresswise.env`. When absent, the public
-  API remains available and admin requests return a configuration error.
-- Production has no usable `cargo` in its non-interactive shell. Build release
-  binaries locally; do not rely on remote compilation.
+Build release binaries locally; production is not a build machine. The normal
+deployment helper is `scripts/deploy_production.sh`.
 
-Use `scripts/deploy_production.sh` to build locally, upload a staged binary,
-and cut over the runtime bundle. Pass `--rebuild-indexes` for indexing schema
-or search-behavior changes. Street autocomplete materializes every normalized
-street prefix as an index term, so changes to that behavior require this mode.
-This mode derives every active two-letter country code from the production
-database and persists it in a systemd drop-in, overriding the base service
-unit's `COUNTRY_CODES` setting. Run it after importing addresses for a new
-country.
-It builds into a sibling index directory
-while the service stays online, then swaps directories during the short service
-restart. The source checkout is still kept on `master` for troubleshooting.
-The service may take a brief systemd restart cycle after a binary cutover; wait
-for the health endpoint instead of treating the first connection refusal as a
-failed deployment.
-Confirm `systemctl is-active addresswise` is `active` and
-`curl --fail http://127.0.0.1:8080/health` succeeds before reporting
-completion.
+- No arguments: binary-only deployment; use this for static/API changes that
+  do not alter indexes.
+- `--rebuild-indexes`: rebuilds every active country; use only for global
+  indexing/schema changes or after all indexes were intentionally removed.
+- `--add-countries CC,...`: preserves other indexes and rebuilds only the
+  requested active country directories.
 
-Completed 2026-08-19: production imported Norway from
-`matrikkelenAdresse.csv` with `2,567,025` inserted `vegadresse` rows and
-`34,918` skipped `matrikkeladresse` rows. A subsequent
-`scripts/deploy_production.sh --rebuild-indexes` rollout rebuilt and activated
-the country set `AT,CH,CZ,DE,DK,EE,ES,FR,HU,LT,LU,LV,NL,NO,PT,SK`; confirmable
-via `/health`.
+For a country-specific data change, do not run a full rebuild. Confirm the
+requested country is active in PostgreSQL, rebuild its two indexes, and verify
+the service. If the helper fails before cutover, verify that production was
+unchanged; local SSH configuration may require an explicit known-good config.
 
-Operational note: `scripts/deploy_production.sh --rebuild-indexes` rebuilds every
-active country returned from the production database. For onboarding or replacing
-specific countries, use `scripts/deploy_production.sh --add-countries CC,...`;
-it hard-links the existing index tree, builds only the requested `<cc>` and
-`<cc>_streets` directories, then atomically swaps the merged tree and updates
-`COUNTRY_CODES` during the service restart.
+Before destructive production actions, identify exact targets and confirm the
+user requested them. Never recursively delete a broad directory. For country
+removal, stop the service, delete only that country’s SQL rows and index/source
+paths, remove it from the service country configuration, then restart and
+health-check.
 
-Completed 2026-08-20: production imported BG (`3,048,259`), FI (`3,850,211`),
-HR (`1,681,530`), RS (`2,724,376`), and SI (`573,634`) active address rows
-from the streamed GeoJSON sources, with zero skipped JSON or invalid rows. The
-five country and five street indexes were added with
-`scripts/deploy_production.sh --add-countries BG,FI,HR,RS,SI`; production
-health confirmed all 21 countries active.
-
-For OSM PBF address replacement imports, production has `osmium-tool` and
-`jq` installed. Use `scripts/etl_osm_pbf.sh`; it streams tagged OSM addresses
-through a FIFO and does not create a large GeoJSON intermediate file. The
-script requires a locality by default, resolving standard `addr:*` and
-`is_in:*` city/municipality tags; do not import locality-less records without
-a spatial boundary/place enrichment pass.
-
-### Active German OSM re-import (2026-08-04)
-
-The previous DE OSM import was removed because it included duplicate
-address-tagged OSM objects without a locality. The corrected importer skips
-those objects (`OSM_REQUIRE_LOCALITY=true`), retaining the corresponding
-objects that contain `addr:city`/another supported locality tag.
-
-The source PBF is `/home/peter/germany-latest.osm.pbf` on production (SHA-256
-`15f7a663ee428b8ab9e0cb30e6097ca30a97a06b4b102a0085208dcb41b9abfb`). The
-import was launched in the background with log
-`/home/peter/addresswise-deploy/imports/de_osm_reimport_20260804.log`:
+After every production deployment verify:
 
 ```sh
-sudo sh -c '
-  set -euo pipefail
-  set -a; . /etc/addresswise.env; set +a
-  export OSM_COUNTRY_CODE=DE OSM_REQUIRE_LOCALITY=true
-  export ETL_GEOJSON_BINARY=/home/peter/addresswise-src/etl_geojson
-  exec runuser -u peter -- /home/peter/addresswise-src/scripts/etl_osm_pbf.sh \
-    /home/peter/germany-latest.osm.pbf
-'
+systemctl is-active addresswise
+curl --fail http://127.0.0.1:8080/health
+df -h /
+free -h
 ```
 
-Before treating the import as successful, wait for that process to exit and
-the log to report zero skipped JSON/invalid rows. Then query a ten-row DE
-sample and verify non-empty street, house number, postcode, locality, and
-coordinates; confirm `Konrad-Adenauer-Allee 1-11` is `Bad Vilbel, 61118`.
-Build replacement DE and `de_streets` indexes in a sibling directory, cut over
-only those two directories with rollback protection, and confirm
-`systemctl is-active addresswise` plus `/health`. Keep the live service online
-while the import and index build run.
+Do not report success based on the first transient connection refusal during a
+restart; wait for the final health response. The current active production
+country set is:
 
-Completed 2026-08-04: the importer finished with `35,323,479` parsed and
-`29,357,037` inserted rows, with `skipped_json=0` and `skipped_invalid=0`.
-The replacement indexes built `19,575,650` active DE addresses and `369,715`
-distinct DE streets in
-`/home/peter/addresswise-deploy/data/indexes.de.next.20260804143840`. Only
-`de` and `de_streets` were swapped into the live index root; the rollback
-copies are `de.pre_de_reimport.20260804145634` and
-`de_streets.pre_de_reimport.20260804145634`. An authenticated local API search
-verified `Konrad-Adenauer-Allee 1-11, Bad Vilbel, 61118`; systemd and
-`/health` were both healthy after the cutover.
+```text
+AT BG CH CZ DE DK EE ES FI FR HR HU LT LU LV NL NO PT RS SI SK
+```
 
-## Keeping this file current
+GB and IE are intentionally disabled and their production data and indexes
+were removed on 2026-08-22.
 
-Whenever work reveals a new or corrected project, deployment, service, or
-operational fact, update this `AGENTS.md` in the same workstream and commit it.
-Do not leave deployment knowledge only in conversation history.
+## Demo and API checks
+
+The public demo is served from embedded `static/index.html`. When changing
+country options, keep autocomplete and validation selectors consistent and
+verify the live HTML after deployment.
+
+Autocomplete endpoints require an API key and authorized origin; validation
+requires an active API key. Never expose production keys in commands, logs,
+screenshots, source, or this file.
+
+## Definition of done
+
+For a code change:
+
+- Make the smallest scoped change.
+- Run relevant tests, then `scripts/check.sh` for a completed Rust change.
+- Inspect the diff and confirm no secrets or generated artifacts were added.
+- Update this file only when a durable project or operational fact changed.
+
+For a production change:
+
+- Verify exact deployed binary, config, and data paths.
+- Monitor disk and memory for large imports or index builds.
+- Verify service state and `/health` after cutover.
+- Report what changed, what was verified, and any known limitation.

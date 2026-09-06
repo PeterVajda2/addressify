@@ -8,6 +8,6 @@ DATABASE_URL="${DATABASE_URL:-$DB_URL_DEFAULT}"
 cd "$ROOT_DIR"
 
 cargo run --release --bin etl_be_csv -- \
-  --input "$ROOT_DIR/address_data/BE_source.csv" \
+  --input "$ROOT_DIR/belgian_data.csv" \
   --database-url "$DATABASE_URL" \
   "$@"

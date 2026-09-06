@@ -25,6 +25,9 @@ Recommended production flow:
   Example: `/opt/addresswise/data/indexes`
 - `DATABASE_URL`
   Example: `postgres://address:password@127.0.0.1:5432/address_wise`
+- `TOMTOM_API_KEY`
+  Optional server-side key for Great Britain (`GB`) autocomplete and validation.
+  Keep it in the deployment secret environment; it is never sent to browsers.
 
 Optional:
 

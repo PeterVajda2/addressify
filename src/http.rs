@@ -20,8 +20,11 @@ use xitca_web::{
 use crate::AppResult;
 use crate::auth::{AuthState, ErrorResponse, error_status, normalize_domain};
 use crate::models::{SearchResult, StructuredAddress};
-use crate::normalize::normalize_text;
-use crate::search::{AddressIndexes, search_indexes_async, validation_candidates_async};
+use crate::normalize::{normalize_text, normalize_text_for_country};
+use crate::search::{
+    AddressIndexes, search_indexes_async, search_postal_codes_async, validation_candidates_async,
+};
+use addresswise::address_rules::{DisplayAddressParts, format_display_address};
 
 const MAX_WORKERS: usize = 8;
 const BLOCKING_THREADS_PER_WORKER: usize = 8;
@@ -32,6 +35,8 @@ pub struct AppState {
     pub auth: AuthState,
     pub demo_api_key: String,
     pub admin_api_key: Option<String>,
+    pub tomtom_api_key: Option<String>,
+    pub tomtom_client: reqwest::Client,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,6 +45,8 @@ struct SearchParams {
     country: Option<String>,
     limit: Option<usize>,
     street_only: Option<String>,
+    postal_only: Option<String>,
+    postal_code: Option<String>,
     api_key: Option<String>,
 }
 
@@ -516,8 +523,10 @@ async fn search(
     let country = normalize_country(params.country.as_deref());
     let limit = params.limit.unwrap_or(10).clamp(1, 50);
     let street_only = is_street_only(params.street_only.as_deref());
+    let postal_only = is_street_only(params.postal_only.as_deref());
 
-    if let Some(country_code) = country.as_deref()
+    if !matches!(country.as_deref(), Some("GB" | "IE"))
+        && let Some(country_code) = country.as_deref()
         && !state.indexes.has_country(country_code)
     {
         return json_error(
@@ -537,12 +546,87 @@ async fn search(
         return json_error(error_status(&error), error);
     }
 
+    if postal_only {
+        let Some(country_code) = country.as_deref() else {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                ErrorResponse {
+                    error: "country_required",
+                    message: String::from("country is required for postal-code search"),
+                },
+            );
+        };
+        let Some(index) = state.indexes.by_country.get(country_code).cloned() else {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                ErrorResponse {
+                    error: "invalid_country",
+                    message: format!("country `{country_code}` is not indexed"),
+                },
+            );
+        };
+        return match search_postal_codes_async(index, query.clone(), limit).await {
+            Ok(results) => json_ok(SearchResponse {
+                query,
+                country,
+                count: results.len(),
+                results,
+            }),
+            Err(error) => json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorResponse {
+                    error: "search_failed",
+                    message: format!("search failed: {error}"),
+                },
+            ),
+        };
+    }
+
+    if matches!(country.as_deref(), Some("GB" | "IE")) {
+        let Some(tomtom_api_key) = state.tomtom_api_key.as_deref() else {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                ErrorResponse {
+                    error: "remote_search_unavailable",
+                    message: String::from("Remote country search is not configured"),
+                },
+            );
+        };
+        return match tomtom_search(
+            &state.tomtom_client,
+            tomtom_api_key,
+            country.as_deref().expect("remote country was checked"),
+            &query,
+            limit,
+        )
+        .await
+        {
+            Ok(results) => json_ok(SearchResponse {
+                query,
+                country,
+                count: results.len(),
+                results,
+            }),
+            Err(error) => {
+                eprintln!("TomTom remote search failed for {country:?}: {error}");
+                json_error(
+                    StatusCode::BAD_GATEWAY,
+                    ErrorResponse {
+                        error: "remote_search_failed",
+                        message: String::from("Remote country search is temporarily unavailable"),
+                    },
+                )
+            }
+        };
+    }
+
     match search_indexes_async(
         state.indexes.clone(),
         country.clone(),
         query.clone(),
         limit,
         street_only,
+        params.postal_code,
     )
     .await
     {
@@ -562,6 +646,118 @@ async fn search(
     }
 }
 
+async fn tomtom_search(
+    client: &reqwest::Client,
+    api_key: &str,
+    country: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SearchResult>, String> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut url = url::Url::parse("https://api.tomtom.com/search/2/search/")
+        .map_err(|error| format!("invalid TomTom URL: {error}"))?;
+    let query_path = format!("{}.json", query.trim());
+    url.path_segments_mut()
+        .map_err(|_| String::from("TomTom URL cannot accept path segments"))?
+        .push(&query_path);
+    let mut query_pairs = url.query_pairs_mut();
+    query_pairs
+        .append_pair("key", api_key)
+        .append_pair("typeahead", "true")
+        .append_pair("limit", &limit.to_string())
+        .append_pair("countrySet", country)
+        .append_pair("language", "en-GB");
+    drop(query_pairs);
+
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| format!("request error: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("TomTom returned HTTP {status}"));
+    }
+    let payload: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|error| format!("invalid TomTom response: {error}"))?;
+
+    Ok(payload
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|result| {
+            !matches!(
+                result.get("type").and_then(serde_json::Value::as_str),
+                Some("POI")
+            )
+        })
+        .filter_map(tomtom_result)
+        .collect())
+}
+
+fn tomtom_result(result: &serde_json::Value) -> Option<SearchResult> {
+    let address = result.get("address")?;
+    let street = json_string(address, "streetName");
+    let house_number = json_string(address, "streetNumber");
+    let unit = json_string(address, "unitNumber");
+    let locality = json_string(address, "municipality");
+    let dependent_locality = json_string(address, "municipalitySubdivision");
+    let admin_area = json_string(address, "countrySubdivisionName")
+        .or_else(|| json_string(address, "countrySubdivision"));
+    let postal_code = json_string(address, "postalCode");
+    let country_code = json_string(address, "countryCode").unwrap_or_else(|| String::from("GB"));
+    let full_address = format_display_address(DisplayAddressParts {
+        country_code: &country_code,
+        thoroughfare: street.as_deref(),
+        house_number: house_number.as_deref(),
+        unit: unit.as_deref(),
+        locality: locality.as_deref(),
+        dependent_locality: dependent_locality.as_deref(),
+        admin_area: admin_area.as_deref(),
+        postal_code: postal_code.as_deref(),
+    });
+    if full_address.is_empty() {
+        return None;
+    }
+
+    let score = result
+        .get("score")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0) as f32;
+    Some(SearchResult {
+        formatted: full_address.clone(),
+        score,
+        country_code: country_code.clone(),
+        address: StructuredAddress {
+            country_code,
+            admin_area,
+            locality,
+            dependent_locality,
+            thoroughfare: street,
+            premise: house_number,
+            premise_type: None,
+            subpremise: unit,
+            postal_code,
+            full_address,
+        },
+    })
+}
+
+fn json_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(String::from)
+}
+
 async fn validate(
     StateRef(state): StateRef<'_, Arc<AppState>>,
     Query(params): Query<ValidateParams>,
@@ -576,6 +772,55 @@ async fn validate(
             "field `country` must be a two-letter country code",
         );
     };
+    if matches!(country.as_str(), "GB" | "IE") {
+        if let Err(message) = validate_request_fields(&request) {
+            return validation_error("invalid_request", &message);
+        }
+        if let Err(error) = state
+            .auth
+            .authorize_without_domain(req, remote_addr, params.api_key.as_deref())
+            .await
+        {
+            return json_error(error_status(&error), error);
+        }
+        let Some(tomtom_api_key) = state.tomtom_api_key.as_deref() else {
+            return validation_error(
+                "remote_validation_unavailable",
+                "Remote country validation is not configured",
+            );
+        };
+        let candidates = match tomtom_search(
+            &state.tomtom_client,
+            tomtom_api_key,
+            &country,
+            &validation_query_text(&request),
+            VALIDATION_SUGGESTION_LIMIT,
+        )
+        .await
+        {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                eprintln!("TomTom remote validation failed for {country}: {error}");
+                return json_error(
+                    StatusCode::BAD_GATEWAY,
+                    ErrorResponse {
+                        error: "remote_validation_failed",
+                        message: String::from(
+                            "Remote country validation is temporarily unavailable",
+                        ),
+                    },
+                );
+            }
+        };
+        let matches = ranked_validation_matches(&request, candidates);
+        let best = matches.first();
+        return json_ok(ValidationResponse {
+            valid: best.is_some_and(|item| address_matches_request(&request, &item.address)),
+            confidence_ratio: best.map_or(0.0, |item| item.confidence_ratio),
+            corrected_address: best.map(|item| item.address.clone()),
+            suggestions: matches,
+        });
+    }
     if !state.indexes.has_country(&country) {
         return validation_error(
             "invalid_country",
@@ -728,10 +973,13 @@ fn house_number_similarity(input: &str, address: &StructuredAddress) -> f64 {
 }
 
 fn address_matches_request(request: &ValidateRequest, address: &StructuredAddress) -> bool {
-    normalize_text(&request.street) == normalize_optional(address.thoroughfare.as_deref())
-        && normalize_text(&request.house_number) == normalize_optional(address.premise.as_deref())
+    normalize_text_for_country(&address.country_code, &request.street)
+        == normalize_optional_for_country(&address.country_code, address.thoroughfare.as_deref())
+        && normalize_text_for_country(&address.country_code, &request.house_number)
+            == normalize_optional_for_country(&address.country_code, address.premise.as_deref())
         && compact(&request.postal_code) == compact_optional(address.postal_code.as_deref())
-        && normalize_text(&request.city) == normalize_optional(address.locality.as_deref())
+        && normalize_text_for_country(&address.country_code, &request.city)
+            == normalize_optional_for_country(&address.country_code, address.locality.as_deref())
 }
 
 fn text_similarity(input: &str, candidate: Option<&str>) -> f64 {
@@ -746,6 +994,12 @@ fn compact_similarity(input: &str, candidate: Option<&str>) -> f64 {
 
 fn normalize_optional(value: Option<&str>) -> String {
     value.map(normalize_text).unwrap_or_default()
+}
+
+fn normalize_optional_for_country(country_code: &str, value: Option<&str>) -> String {
+    value
+        .map(|value| normalize_text_for_country(country_code, value))
+        .unwrap_or_default()
 }
 
 fn compact_optional(value: Option<&str>) -> String {
@@ -905,6 +1159,8 @@ mod tests {
             auth: AuthState::Disabled,
             demo_api_key: String::from("test-key"),
             admin_api_key: Some(String::from("test-admin-key")),
+            tomtom_api_key: None,
+            tomtom_client: reqwest::Client::new(),
         });
         let service = App::new()
             .with_state(indexes)
@@ -1032,6 +1288,8 @@ mod tests {
             auth: AuthState::Disabled,
             demo_api_key: String::from("test-key"),
             admin_api_key: Some(String::from("test-admin-key")),
+            tomtom_api_key: None,
+            tomtom_client: reqwest::Client::new(),
         });
         let service = App::new()
             .with_state(indexes)
@@ -1067,6 +1325,8 @@ mod tests {
             auth: AuthState::Disabled,
             demo_api_key: String::from("test-key"),
             admin_api_key: Some(String::from("test-admin-key")),
+            tomtom_api_key: None,
+            tomtom_client: reqwest::Client::new(),
         });
         let service = App::new()
             .with_state(state)
@@ -1096,6 +1356,8 @@ mod tests {
             auth: AuthState::Disabled,
             demo_api_key: String::from("test-key"),
             admin_api_key: Some(String::from("test-admin-key")),
+            tomtom_api_key: None,
+            tomtom_client: reqwest::Client::new(),
         });
         let service = App::new()
             .with_state(indexes)
@@ -1115,8 +1377,11 @@ mod tests {
         assert!(body.contains("<title>addresswise</title>"));
         assert!(body.contains("id=\"search-form\""));
         assert!(body.contains("id=\"country-input\""));
+        assert!(body.contains("id=\"search-mode\""));
+        assert!(body.contains("value=\"postal-first\""));
         assert!(body.contains("Select a country"));
-        assert!(body.contains("streetInput.disabled = !countryInput.value"));
+        assert!(body.contains("postalCodeInput.disabled = !countryInput.value"));
+        assert!(body.contains("streetInput.disabled = true"));
         assert!(body.contains("label for=\"street-input\">Street &amp; house number</label>"));
         assert!(body.contains("A little help finding your way"));
         assert!(body.contains("class=\"brand-mark\""));
@@ -1126,6 +1391,8 @@ mod tests {
         assert!(body.contains("const demoApiKey = \"test-key\""));
         assert!(!body.contains("api-key-input"));
         assert!(body.contains("&street_only"));
+        assert!(body.contains("&postal_only"));
+        assert!(body.contains("selectedPostalCode"));
         assert!(body.contains("selectedStreet"));
         assert!(body.contains("focusStreetInputAtEnd"));
         assert!(body.contains("`${selectedStreet} `"));
@@ -1144,6 +1411,8 @@ mod tests {
             auth: AuthState::Disabled,
             demo_api_key: String::from("test-key"),
             admin_api_key: Some(String::from("test-admin-key")),
+            tomtom_api_key: None,
+            tomtom_client: reqwest::Client::new(),
         });
         let service = App::new()
             .with_state(state)
@@ -1228,11 +1497,14 @@ mod tests {
         reader.reload()?;
 
         let address_index = AddressIndex {
+            country_code: String::from("SK"),
             _storage: IndexStorage::Temp {
                 _temp_dir: index_dir,
+                _postal_temp_dir: TempDir::new().expect("postal test temp directory"),
             },
             reader: reader.clone(),
-            street_reader: reader,
+            street_reader: reader.clone(),
+            postal_reader: reader,
             fields,
         };
 
@@ -1256,6 +1528,7 @@ mod tests {
         let search_text = schema_builder.add_text_field("search_text", TEXT);
         let street_search_text = schema_builder.add_text_field("street_search_text", TEXT);
         let street_prefix_text = schema_builder.add_text_field("street_prefix_text", STRING);
+        let postal_code_prefix = schema_builder.add_text_field("postal_code_prefix", STRING);
         let schema = schema_builder.build();
         let index = Index::create_in_dir(index_dir, schema)?;
 
@@ -1275,6 +1548,7 @@ mod tests {
                 search_text,
                 street_search_text,
                 street_prefix_text,
+                postal_code_prefix,
             },
         ))
     }
@@ -1316,5 +1590,33 @@ mod tests {
             }
         }
         document
+    }
+
+    #[test]
+    fn tomtom_result_uses_the_public_search_shape() {
+        let result = super::tomtom_result(&serde_json::json!({
+            "score": 9.5,
+            "address": {
+                "streetName": "Downing Street",
+                "streetNumber": "10",
+                "municipality": "London",
+                "countrySubdivisionName": "England",
+                "postalCode": "SW1A 2AA",
+                "countryCode": "GB"
+            }
+        }))
+        .expect("TomTom address should map");
+
+        assert_eq!(result.country_code, "GB");
+        assert_eq!(
+            result.address.thoroughfare.as_deref(),
+            Some("Downing Street")
+        );
+        assert_eq!(result.address.premise.as_deref(), Some("10"));
+        assert_eq!(result.address.postal_code.as_deref(), Some("SW1A 2AA"));
+        assert_eq!(
+            result.formatted,
+            "Downing Street 10, London, England, SW1A 2AA, GB"
+        );
     }
 }

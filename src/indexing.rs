@@ -15,7 +15,7 @@ use tempfile::TempDir;
 
 use crate::AppResult;
 use crate::models::Address;
-use crate::normalize::normalize_text;
+use crate::normalize::{normalize_text, normalize_text_for_country};
 use crate::search::{AddressIndex, AddressIndexes, IndexFields, IndexStorage};
 
 pub fn build_indices_from_postgres(
@@ -40,19 +40,28 @@ pub fn build_indices_from_postgres(
 
 fn build_index_from_postgres(country_code: &str) -> AppResult<(AddressIndex, usize)> {
     let index_dir = TempDir::new()?;
+    let postal_dir = TempDir::new()?;
     let (schema, fields) = address_schema();
     let index = Index::create_in_dir(&index_dir, schema)?;
     let mut writer = index.writer(100_000_000)?;
     let indexed_count = stream_postgres_addresses(country_code, &mut writer, fields)?;
     writer.commit()?;
+    let (postal_schema, postal_fields) = address_schema();
+    let postal_index = Index::create_in_dir(&postal_dir, postal_schema)?;
+    let mut postal_writer = postal_index.writer(100_000_000)?;
+    stream_postgres_postal_codes(country_code, &mut postal_writer, postal_fields)?;
+    postal_writer.commit()?;
 
     Ok((
         AddressIndex {
+            country_code: country_code.to_string(),
             _storage: IndexStorage::Temp {
                 _temp_dir: index_dir,
+                _postal_temp_dir: postal_dir,
             },
             reader: build_reader(&index)?,
             street_reader: build_reader(&index)?,
+            postal_reader: build_reader(&postal_index)?,
             fields,
         },
         indexed_count,
@@ -70,8 +79,10 @@ pub fn build_indices_to_dir(
         let country_started = Instant::now();
         let country_dir = country_index_dir(index_root, country_code);
         let street_dir = country_street_index_dir(index_root, country_code);
+        let postal_dir = country_postal_index_dir(index_root, country_code);
         build_index_to_dir(country_code, &country_dir)?;
         build_street_index_to_dir(country_code, &street_dir)?;
+        build_postal_index_to_dir(country_code, &postal_dir)?;
         let indexed_count = open_index_from_dir(country_code, &country_dir)?.doc_count() as usize;
 
         println!(
@@ -130,14 +141,20 @@ fn open_index_from_dir(country_code: &str, index_dir: &Path) -> AppResult<Addres
         index_dir.parent().unwrap(),
         country_code,
     ))?;
+    let postal_index = Index::open_in_dir(country_postal_index_dir(
+        index_dir.parent().unwrap(),
+        country_code,
+    ))?;
     let fields = index_fields(index.schema())?;
 
     Ok(AddressIndex {
+        country_code: country_code.to_string(),
         _storage: IndexStorage::Persistent {
             _path: index_dir.to_path_buf(),
         },
         reader: build_reader(&index)?,
         street_reader: build_reader(&street_index)?,
+        postal_reader: build_reader(&postal_index)?,
         fields,
     })
 }
@@ -153,6 +170,20 @@ fn build_street_index_to_dir(country_code: &str, index_dir: &Path) -> AppResult<
     let count = stream_postgres_streets(country_code, &mut writer, fields)?;
     writer.commit()?;
     println!("Indexed {count} distinct {country_code} streets.");
+    Ok(())
+}
+
+fn build_postal_index_to_dir(country_code: &str, index_dir: &Path) -> AppResult<()> {
+    if index_dir.exists() {
+        fs::remove_dir_all(index_dir)?;
+    }
+    fs::create_dir_all(index_dir)?;
+    let (schema, fields) = address_schema();
+    let index = Index::create_in_dir(index_dir, schema)?;
+    let mut writer = index.writer(100_000_000)?;
+    let count = stream_postgres_postal_codes(country_code, &mut writer, fields)?;
+    writer.commit()?;
+    println!("Indexed {count} distinct {country_code} postal codes.");
     Ok(())
 }
 
@@ -173,6 +204,7 @@ pub fn address_schema() -> (Schema, IndexFields) {
     let search_text = schema_builder.add_text_field("search_text", TEXT);
     let street_search_text = schema_builder.add_text_field("street_search_text", TEXT);
     let street_prefix_text = schema_builder.add_text_field("street_prefix_text", STRING);
+    let postal_code_prefix = schema_builder.add_text_field("postal_code_prefix", STRING);
     let schema = schema_builder.build();
 
     (
@@ -191,6 +223,7 @@ pub fn address_schema() -> (Schema, IndexFields) {
             search_text,
             street_search_text,
             street_prefix_text,
+            postal_code_prefix,
         },
     )
 }
@@ -210,6 +243,7 @@ fn index_fields(schema: Schema) -> AppResult<IndexFields> {
         search_text: schema.get_field("search_text")?,
         street_search_text: schema.get_field("street_search_text")?,
         street_prefix_text: schema.get_field("street_prefix_text")?,
+        postal_code_prefix: schema.get_field("postal_code_prefix")?,
     })
 }
 
@@ -277,7 +311,38 @@ fn stream_postgres_streets(
         let Some(street) = address.thoroughfare.as_deref() else {
             continue;
         };
-        if street.trim().is_empty() || !seen.insert(normalize_text(street)) {
+        if street.trim().is_empty()
+            || !seen.insert(normalize_text_for_country(country_code, street))
+        {
+            continue;
+        }
+        writer.add_document(tantivy_document(&address, fields))?;
+    }
+    let status = child.wait()?;
+    if !status.success() {
+        return Err(format!("psql exited with status {status}").into());
+    }
+    Ok(seen.len())
+}
+
+fn stream_postgres_postal_codes(
+    country_code: &str,
+    writer: &mut IndexWriter,
+    fields: IndexFields,
+) -> AppResult<usize> {
+    let mut child = postgres_command(&address_copy_sql(country_code))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let stdout = child.stdout.take().ok_or("failed to capture psql stdout")?;
+    let mut seen = HashSet::new();
+    for line in BufReader::new(stdout).lines() {
+        let address = address_from_json_line(&line?)?;
+        let Some(postal_code) = address.postal_code.as_deref() else {
+            continue;
+        };
+        let key = normalize_text(postal_code).replace(' ', "");
+        if postal_code.trim().is_empty() || !seen.insert(key) {
             continue;
         }
         writer.add_document(tantivy_document(&address, fields))?;
@@ -307,6 +372,10 @@ fn country_index_dir(index_root: &Path, country_code: &str) -> PathBuf {
 
 fn country_street_index_dir(index_root: &Path, country_code: &str) -> PathBuf {
     index_root.join(format!("{}_streets", country_code.to_lowercase()))
+}
+
+fn country_postal_index_dir(index_root: &Path, country_code: &str) -> PathBuf {
+    index_root.join(format!("{}_postal_codes", country_code.to_lowercase()))
 }
 
 fn address_copy_sql(country_code: &str) -> String {
@@ -395,12 +464,33 @@ fn tantivy_document(address: &Address, fields: IndexFields) -> TantivyDocument {
     add_optional_text(&mut document, fields.premise_type, &address.premise_type);
     add_optional_text(&mut document, fields.subpremise, &address.subpremise);
     add_optional_text(&mut document, fields.postal_code, &address.postal_code);
+    if let Some(postal_code) = &address.postal_code {
+        let normalized = normalize_text(postal_code).replace(' ', "");
+        for end in 1..=normalized.len() {
+            document.add_text(fields.postal_code_prefix, &normalized[..end]);
+        }
+    }
     document.add_text(fields.full_address, address.formatted());
-    document.add_text(fields.search_text, &address.search_text);
+    let normalized_address =
+        normalize_text_for_country(&address.country_code, &address.full_address);
+    document.add_text(fields.search_text, &normalized_address);
+    let folded_address = normalize_text(&address.full_address);
+    if folded_address != normalized_address {
+        document.add_text(fields.search_text, folded_address);
+    }
     if let Some(thoroughfare) = &address.thoroughfare {
-        let normalized_street = normalize_text(thoroughfare);
+        let normalized_street = normalize_text_for_country(&address.country_code, thoroughfare);
         document.add_text(fields.street_search_text, &normalized_street);
-        for end in 1..=normalized_street.len() {
+        let folded_street = normalize_text(thoroughfare);
+        if folded_street != normalized_street {
+            document.add_text(fields.street_search_text, folded_street);
+        }
+        let prefix_endings = normalized_street
+            .char_indices()
+            .map(|(index, _)| index)
+            .skip(1)
+            .chain(std::iter::once(normalized_street.len()));
+        for end in prefix_endings {
             document.add_text(fields.street_prefix_text, &normalized_street[..end]);
         }
     }

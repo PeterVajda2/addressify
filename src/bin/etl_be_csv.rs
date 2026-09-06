@@ -20,6 +20,7 @@ const DEFAULT_BATCH_SIZE: usize = 4_000;
 #[derive(Debug, Clone)]
 struct Options {
     input: PathBuf,
+    source_dataset: Option<String>,
     database_url: Option<String>,
     batch_size: usize,
     truncate: bool,
@@ -117,12 +118,13 @@ async fn main() -> Result<()> {
     }
 
     let run_marker = current_run_marker()?;
-    let source_dataset = opts
-        .input
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("BE_source.csv")
-        .to_string();
+    let source_dataset = opts.source_dataset.clone().unwrap_or_else(|| {
+        opts.input
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("BE_source.csv")
+            .to_string()
+    });
 
     let file = File::open(&opts.input)
         .with_context(|| format!("failed to open {}", opts.input.display()))?;
@@ -140,10 +142,10 @@ async fn main() -> Result<()> {
             )
         })?;
 
-        match to_row(record, &source_dataset, run_marker) {
-            Some(row) => {
-                totals.rows_parsed += 1;
-                buffer.push(row);
+        match to_rows(record, &source_dataset, run_marker) {
+            Some(rows) => {
+                totals.rows_parsed += rows.len();
+                buffer.extend(rows);
             }
             None => {
                 totals.rows_skipped += 1;
@@ -201,7 +203,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn to_row(record: BeRecord, source_dataset: &str, run_marker: i64) -> Option<AddressRow> {
+fn to_rows(record: BeRecord, source_dataset: &str, run_marker: i64) -> Option<Vec<AddressRow>> {
     if !record.status.trim().is_empty() && !record.status.eq_ignore_ascii_case("current") {
         return None;
     }
@@ -210,14 +212,15 @@ fn to_row(record: BeRecord, source_dataset: &str, run_marker: i64) -> Option<Add
     }
 
     let source_hash = first_non_empty([record.fed_address_id.as_str(), record.best_id.as_str()])?;
-    let thoroughfare = clean_thoroughfare(
-        compose_multilingual_name([
-            &record.streetname_fr,
-            &record.streetname_nl,
-            &record.streetname_de,
-        ])
-        .as_deref(),
-    );
+    let street_names = multilingual_values([
+        &record.streetname_fr,
+        &record.streetname_nl,
+        &record.streetname_de,
+    ]);
+    let street_name_count = street_names.len();
+    if street_names.is_empty() {
+        return None;
+    }
     let locality = compose_multilingual_name([
         &record.municipality_fr,
         &record.municipality_nl,
@@ -234,54 +237,71 @@ fn to_row(record: BeRecord, source_dataset: &str, run_marker: i64) -> Option<Add
     let premise_type = parsed.house_number_type;
     let subpremise = parsed.unit;
 
-    let full_address = format_display_address(DisplayAddressParts {
-        country_code: "BE",
-        thoroughfare: thoroughfare.as_deref(),
-        house_number: premise.as_deref(),
-        unit: subpremise.as_deref(),
-        locality: locality.as_deref(),
-        dependent_locality: dependent_locality.as_deref(),
-        admin_area: None,
-        postal_code: postal_code.as_deref(),
-    });
-    if full_address.is_empty() {
-        return None;
-    }
+    let rows = street_names
+        .into_iter()
+        .filter_map(|street_name| {
+            let thoroughfare = clean_thoroughfare(Some(street_name.as_str()));
+            let full_address = format_display_address(DisplayAddressParts {
+                country_code: "BE",
+                thoroughfare: thoroughfare.as_deref(),
+                house_number: premise.as_deref(),
+                unit: subpremise.as_deref(),
+                locality: locality.as_deref(),
+                dependent_locality: dependent_locality.as_deref(),
+                admin_area: None,
+                postal_code: postal_code.as_deref(),
+            });
+            if full_address.is_empty() {
+                return None;
+            }
 
-    Some(AddressRow {
-        source_hash,
-        country_code: "BE".to_string(),
-        source_dataset: source_dataset.to_string(),
-        admin_area: None,
-        locality,
-        dependent_locality,
-        thoroughfare,
-        premise,
-        premise_type,
-        subpremise,
-        postal_code,
-        latitude: None,
-        longitude: None,
-        full_address: full_address.clone(),
-        search_text: normalize_text(&full_address),
-        last_seen_run: run_marker,
-    })
+            let variant_hash = if street_name_count > 1 {
+                format!("{source_hash}::{}", normalize_text(&street_name))
+            } else {
+                source_hash.clone()
+            };
+
+            Some(AddressRow {
+                source_hash: variant_hash,
+                country_code: "BE".to_string(),
+                source_dataset: source_dataset.to_string(),
+                admin_area: None,
+                locality: locality.clone(),
+                dependent_locality: dependent_locality.clone(),
+                thoroughfare,
+                premise: premise.clone(),
+                premise_type: premise_type.clone(),
+                subpremise: subpremise.clone(),
+                postal_code: postal_code.clone(),
+                latitude: None,
+                longitude: None,
+                full_address: full_address.clone(),
+                search_text: normalize_text(&full_address),
+                last_seen_run: run_marker,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    (!rows.is_empty()).then_some(rows)
+}
+
+fn multilingual_values(values: [&str; 3]) -> Vec<String> {
+    values
+        .into_iter()
+        .filter_map(to_opt_string)
+        .fold(Vec::<String>::new(), |mut names, value| {
+            if !names
+                .iter()
+                .any(|existing| normalize_text(existing) == normalize_text(&value))
+            {
+                names.push(value);
+            }
+            names
+        })
 }
 
 fn compose_multilingual_name(values: [&str; 3]) -> Option<String> {
-    let names = values.into_iter().filter_map(to_opt_string).fold(
-        Vec::<String>::new(),
-        |mut acc, value| {
-            if !acc
-                .iter()
-                .any(|existing| existing.eq_ignore_ascii_case(&value))
-            {
-                acc.push(value);
-            }
-            acc
-        },
-    );
-
+    let names = multilingual_values(values);
     match names.as_slice() {
         [] => None,
         [only] => Some(only.clone()),
@@ -426,6 +446,7 @@ async fn deactivate_missing_rows(
 
 fn parse_args() -> Result<Options> {
     let mut input = PathBuf::from("address_data/BE_source.csv");
+    let mut source_dataset = None;
     let mut database_url = env::var("DATABASE_URL").ok();
     let mut batch_size = DEFAULT_BATCH_SIZE;
     let mut truncate = false;
@@ -438,6 +459,9 @@ fn parse_args() -> Result<Options> {
             "--input" => input = PathBuf::from(args.next().context("missing value for --input")?),
             "--database-url" => {
                 database_url = Some(args.next().context("missing value for --database-url")?)
+            }
+            "--source-dataset" => {
+                source_dataset = Some(args.next().context("missing value for --source-dataset")?)
             }
             "--batch-size" => {
                 let value = args.next().context("missing value for --batch-size")?;
@@ -480,6 +504,7 @@ fn parse_args() -> Result<Options> {
 
     Ok(Options {
         input,
+        source_dataset,
         database_url,
         batch_size,
         truncate,
@@ -494,6 +519,7 @@ fn print_help() {
 Options:\n\
   --input <path>          Input CSV file (default: address_data/BE_source.csv)\n\
   --database-url <url>    PostgreSQL DSN (or set DATABASE_URL env var)\n\
+  --source-dataset <name> Stable dataset identity (default: input filename)\n\
   --batch-size <n>        Rows per INSERT batch (default: 4000, max: 4095)\n\
   --limit <n>             Stop after n valid parsed rows\n\
   --truncate              Truncate addresses before import\n\
@@ -509,4 +535,21 @@ fn current_run_marker() -> Result<i64> {
         .duration_since(UNIX_EPOCH)
         .context("system clock before unix epoch")?
         .as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_distinct_street_language_names_as_distinct_values() {
+        let names = multilingual_values(["Rue de l'Église", "Kerkstraat", "Kirchstraße"]);
+        assert_eq!(names, ["Rue de l'Église", "Kerkstraat", "Kirchstraße"]);
+    }
+
+    #[test]
+    fn removes_duplicate_street_language_names_case_insensitively() {
+        let names = multilingual_values(["Rue de l'Église", "rue de l'église", ""]);
+        assert_eq!(names, ["Rue de l'Église"]);
+    }
 }

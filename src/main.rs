@@ -11,6 +11,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 
 use auth::AuthState;
@@ -126,6 +127,8 @@ async fn serve_command(
     let auth = AuthState::from_env_required().await?;
     let demo_api_key = demo_api_key_from_env()?;
     let admin_api_key = admin_api_key_from_env()?;
+    let tomtom_api_key = tomtom_api_key_from_env();
+    let tomtom_client = tomtom_client()?;
 
     println!(
         "Loaded {} country index(es) from {} in {:.2?}.",
@@ -143,6 +146,8 @@ async fn serve_command(
             auth,
             demo_api_key,
             admin_api_key,
+            tomtom_api_key,
+            tomtom_client,
         }),
     )
 }
@@ -153,6 +158,8 @@ async fn dev_command(country_codes: &[String], host: String, port: u16) -> AppRe
     let auth = AuthState::from_env_required().await?;
     let demo_api_key = demo_api_key_from_env()?;
     let admin_api_key = admin_api_key_from_env()?;
+    let tomtom_api_key = tomtom_api_key_from_env();
+    let tomtom_client = tomtom_client()?;
 
     for (country_code, indexed_count) in indexed_counts {
         println!("Indexed {indexed_count} active {country_code} addresses.");
@@ -171,6 +178,8 @@ async fn dev_command(country_codes: &[String], host: String, port: u16) -> AppRe
             auth,
             demo_api_key,
             admin_api_key,
+            tomtom_api_key,
+            tomtom_client,
         }),
     )
 }
@@ -183,6 +192,18 @@ fn admin_api_key_from_env() -> AppResult<Option<String>> {
     Ok(env::var("ADMIN_API_KEY")
         .ok()
         .filter(|value| !value.trim().is_empty()))
+}
+
+fn tomtom_api_key_from_env() -> Option<String> {
+    env::var("TOMTOM_API_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn tomtom_client() -> AppResult<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .timeout(Duration::from_secs(4))
+        .build()?)
 }
 
 async fn migrate_command() -> AppResult<()> {

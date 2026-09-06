@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use addresswise::address_rules::{
     DisplayAddressParts, clean_thoroughfare, format_display_address, normalize_address_parts,
 };
-use addresswise::normalize::normalize_text;
+use addresswise::normalize::normalize_text_for_country;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use sqlx::{PgPool, QueryBuilder};
@@ -524,7 +524,7 @@ fn to_row(
         latitude: lat,
         longitude: lon,
         full_address: full_address.clone(),
-        search_text: normalize_text(&full_address),
+        search_text: normalize_text_for_country(country_code, &full_address),
         last_seen_run: run_marker,
     })
 }

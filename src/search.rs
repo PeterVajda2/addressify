@@ -11,7 +11,7 @@ use tokio::task::spawn_blocking;
 
 use crate::AppResult;
 use crate::models::{Address, SearchResult, StructuredAddress};
-use crate::normalize::normalize_text;
+use crate::normalize::{normalize_text, normalize_text_for_country};
 
 #[derive(Clone, Copy)]
 pub struct IndexFields {
@@ -24,6 +24,7 @@ pub struct IndexFields {
     pub premise_type: Field,
     pub subpremise: Field,
     pub postal_code: Field,
+    pub postal_code_prefix: Field,
     pub full_address: Field,
     pub search_text: Field,
     pub street_search_text: Field,
@@ -31,15 +32,22 @@ pub struct IndexFields {
 }
 
 pub struct AddressIndex {
+    pub country_code: String,
     pub _storage: IndexStorage,
     pub reader: IndexReader,
     pub street_reader: IndexReader,
+    pub postal_reader: IndexReader,
     pub fields: IndexFields,
 }
 
 pub enum IndexStorage {
-    Temp { _temp_dir: TempDir },
-    Persistent { _path: PathBuf },
+    Temp {
+        _temp_dir: TempDir,
+        _postal_temp_dir: TempDir,
+    },
+    Persistent {
+        _path: PathBuf,
+    },
 }
 
 pub struct AddressIndexes {
@@ -63,32 +71,110 @@ impl AddressIndexes {
 }
 
 impl AddressIndex {
-    pub fn search(&self, user_input: &str, limit: usize) -> tantivy::Result<Vec<SearchResult>> {
-        let normalized_query = normalize_text(user_input);
+    pub fn search(
+        &self,
+        user_input: &str,
+        postal_code: Option<&str>,
+        limit: usize,
+    ) -> tantivy::Result<Vec<SearchResult>> {
+        let normalized_query = normalize_text_for_country(&self.country_code, user_input);
         if normalized_query.is_empty() {
             return Ok(Vec::new());
         }
 
-        let query = autocomplete_query(self.fields.search_text, &normalized_query);
+        let query = address_query(
+            autocomplete_query(self.fields.search_text, &normalized_query),
+            postal_code.map(normalize_postal_code),
+            self.fields,
+        );
         let searcher = self.reader.searcher();
-        search_tantivy(&searcher, &query, self.fields, limit)
+        let candidate_limit = limit.saturating_mul(20).max(100);
+        let mut results = search_tantivy(&searcher, &query, self.fields, candidate_limit)?;
+        prioritize_autocomplete_matches(&mut results, &normalized_query, limit);
+        Ok(results)
+    }
+
+    pub fn search_postal_codes(
+        &self,
+        user_input: &str,
+        limit: usize,
+    ) -> tantivy::Result<Vec<SearchResult>> {
+        let normalized_query = normalize_postal_code(user_input);
+        if normalized_query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query = TermQuery::new(
+            Term::from_field_text(self.fields.postal_code_prefix, &normalized_query),
+            IndexRecordOption::Basic,
+        );
+        let searcher = self.postal_reader.searcher();
+        let top_docs = searcher.search(
+            &query,
+            &TopDocs::with_limit(limit.saturating_mul(20).max(100)).order_by_score(),
+        )?;
+        let mut results = Vec::with_capacity(limit);
+        let mut seen = HashSet::new();
+        for (score, doc_address) in top_docs {
+            let document: TantivyDocument = searcher.doc(doc_address)?;
+            let Some(address) = address_from_tantivy_doc(&document, self.fields) else {
+                continue;
+            };
+            let Some(postal_code) = address.postal_code.clone() else {
+                continue;
+            };
+            let key = normalize_postal_code(&postal_code);
+            if !seen.insert(key) {
+                continue;
+            }
+            let locality = address.locality.or(address.dependent_locality);
+            let formatted = match locality {
+                Some(locality) => format!("{postal_code} {locality}"),
+                None => postal_code.clone(),
+            };
+            results.push(SearchResult {
+                formatted: formatted.clone(),
+                score,
+                country_code: address.country_code.clone(),
+                address: StructuredAddress {
+                    country_code: address.country_code,
+                    admin_area: address.admin_area,
+                    locality: None,
+                    dependent_locality: None,
+                    thoroughfare: None,
+                    premise: None,
+                    premise_type: None,
+                    subpremise: None,
+                    postal_code: Some(postal_code),
+                    full_address: formatted,
+                },
+            });
+            if results.len() == limit {
+                break;
+            }
+        }
+        Ok(results)
     }
 
     pub fn search_streets(
         &self,
         user_input: &str,
+        postal_code: Option<&str>,
         limit: usize,
     ) -> tantivy::Result<Vec<SearchResult>> {
-        let normalized_query = normalize_text(user_input);
+        let normalized_query = normalize_text_for_country(&self.country_code, user_input);
         if normalized_query.is_empty() {
             return Ok(Vec::new());
         }
 
         // Every normalized street prefix is a dedicated keyword term. This is a
         // direct postings lookup, not a fuzzy/regex expansion over common terms.
-        let query = TermQuery::new(
-            Term::from_field_text(self.fields.street_prefix_text, &normalized_query),
-            IndexRecordOption::Basic,
+        let query = address_query(
+            Box::new(TermQuery::new(
+                Term::from_field_text(self.fields.street_prefix_text, &normalized_query),
+                IndexRecordOption::Basic,
+            )),
+            postal_code.map(normalize_postal_code),
+            self.fields,
         );
         let searcher = self.street_reader.searcher();
         search_tantivy_streets(&searcher, &query, self.fields, limit, limit)
@@ -103,7 +189,7 @@ impl AddressIndex {
         user_input: &str,
         limit: usize,
     ) -> tantivy::Result<Vec<SearchResult>> {
-        let normalized_query = normalize_text(user_input);
+        let normalized_query = normalize_text_for_country(&self.country_code, user_input);
         if normalized_query.is_empty() {
             return Ok(Vec::new());
         }
@@ -123,9 +209,21 @@ impl AddressIndex {
 pub async fn search_async(
     index: Arc<AddressIndex>,
     query: String,
+    postal_code: Option<String>,
     limit: usize,
 ) -> AppResult<Vec<SearchResult>> {
-    let result = spawn_blocking(move || index.search(&query, limit))
+    let result = spawn_blocking(move || index.search(&query, postal_code.as_deref(), limit))
+        .await
+        .map_err(|error| format!("blocking search task failed: {error}"))?;
+    result.map_err(Into::into)
+}
+
+pub async fn search_postal_codes_async(
+    index: Arc<AddressIndex>,
+    query: String,
+    limit: usize,
+) -> AppResult<Vec<SearchResult>> {
+    let result = spawn_blocking(move || index.search_postal_codes(&query, limit))
         .await
         .map_err(|error| format!("blocking search task failed: {error}"))?;
     result.map_err(Into::into)
@@ -148,6 +246,7 @@ pub async fn search_indexes_async(
     query: String,
     limit: usize,
     street_only: bool,
+    postal_code: Option<String>,
 ) -> AppResult<Vec<SearchResult>> {
     if let Some(country) = country {
         let index = indexes
@@ -156,21 +255,33 @@ pub async fn search_indexes_async(
             .cloned()
             .ok_or_else(|| format!("unknown country {country}"))?;
         return if street_only {
-            let streets = search_streets_async(Arc::clone(&index), query.clone(), limit).await?;
+            let streets = search_streets_async(
+                Arc::clone(&index),
+                query.clone(),
+                postal_code.clone(),
+                limit,
+            )
+            .await?;
             if streets.is_empty() {
-                search_async(index, query, limit).await
+                search_async(index, query, postal_code, limit).await
             } else {
                 Ok(streets)
             }
         } else {
-            search_async(index, query, limit).await
+            search_async(index, query, postal_code, limit).await
         };
     }
 
-    let mut results =
-        search_all_countries(Arc::clone(&indexes), query.clone(), limit, street_only).await?;
+    let mut results = search_all_countries(
+        Arc::clone(&indexes),
+        query.clone(),
+        limit,
+        street_only,
+        postal_code,
+    )
+    .await?;
     if street_only && results.is_empty() {
-        results = search_all_countries(indexes, query.clone(), limit, false).await?;
+        results = search_all_countries(indexes, query.clone(), limit, false, None).await?;
         results.sort_by(|left, right| {
             right
                 .score
@@ -199,16 +310,18 @@ async fn search_all_countries(
     query: String,
     limit: usize,
     street_only: bool,
+    postal_code: Option<String>,
 ) -> AppResult<Vec<SearchResult>> {
     let mut tasks = tokio::task::JoinSet::new();
     for index in indexes.by_country.values() {
         let index = Arc::clone(index);
         let query = query.clone();
+        let postal_code = postal_code.clone();
         tasks.spawn(async move {
             if street_only {
-                search_streets_async(index, query, limit).await
+                search_streets_async(index, query, postal_code, limit).await
             } else {
-                search_async(index, query, limit).await
+                search_async(index, query, postal_code, limit).await
             }
         });
     }
@@ -225,11 +338,13 @@ async fn search_all_countries(
 async fn search_streets_async(
     index: Arc<AddressIndex>,
     query: String,
+    postal_code: Option<String>,
     limit: usize,
 ) -> AppResult<Vec<SearchResult>> {
-    let result = spawn_blocking(move || index.search_streets(&query, limit))
-        .await
-        .map_err(|error| format!("blocking search task failed: {error}"))?;
+    let result =
+        spawn_blocking(move || index.search_streets(&query, postal_code.as_deref(), limit))
+            .await
+            .map_err(|error| format!("blocking search task failed: {error}"))?;
     result.map_err(Into::into)
 }
 
@@ -259,6 +374,30 @@ fn autocomplete_query(search_field: Field, normalized_query: &str) -> Box<dyn Qu
     }
 
     Box::new(BooleanQuery::new(subqueries))
+}
+
+fn address_query(
+    query: Box<dyn Query>,
+    postal_code: Option<String>,
+    fields: IndexFields,
+) -> Box<dyn Query> {
+    let Some(postal_code) = postal_code.filter(|value| !value.is_empty()) else {
+        return query;
+    };
+    Box::new(BooleanQuery::new(vec![
+        (Occur::Must, query),
+        (
+            Occur::Must,
+            Box::new(TermQuery::new(
+                Term::from_field_text(fields.postal_code_prefix, &postal_code),
+                IndexRecordOption::Basic,
+            )),
+        ),
+    ]))
+}
+
+fn normalize_postal_code(value: &str) -> String {
+    normalize_text(value).replace(' ', "")
 }
 
 fn validation_query(search_field: Field, normalized_query: &str) -> Box<dyn Query> {
@@ -318,11 +457,55 @@ fn deduplicate_search_results(results: Vec<SearchResult>, limit: usize) -> Vec<S
         .filter(|result| {
             seen.insert((
                 result.country_code.clone(),
-                normalize_text(&result.address.full_address),
+                normalize_text_for_country(&result.country_code, &result.address.full_address),
             ))
         })
         .take(limit)
         .collect()
+}
+
+fn prioritize_autocomplete_matches(
+    results: &mut Vec<SearchResult>,
+    normalized_query: &str,
+    limit: usize,
+) {
+    results.sort_by(|left, right| {
+        autocomplete_match_rank(left, normalized_query)
+            .cmp(&autocomplete_match_rank(right, normalized_query))
+            .then_with(|| right.score.total_cmp(&left.score))
+            .then_with(|| left.formatted.cmp(&right.formatted))
+            .then_with(|| left.country_code.cmp(&right.country_code))
+    });
+
+    results.truncate(limit);
+}
+
+fn autocomplete_match_rank(result: &SearchResult, normalized_query: &str) -> u8 {
+    let address = &result.address;
+    let street_house = match (&address.thoroughfare, &address.premise) {
+        (Some(street), Some(premise)) => {
+            let house = match &address.subpremise {
+                Some(unit) => format!("{premise}/{unit}"),
+                None => premise.clone(),
+            };
+            normalize_text_for_country(&address.country_code, &format!("{street} {house}"))
+        }
+        (Some(street), None) => normalize_text_for_country(&address.country_code, street),
+        (None, Some(premise)) => normalize_text_for_country(&address.country_code, premise),
+        (None, None) => String::new(),
+    };
+
+    if street_house == normalized_query {
+        return 0;
+    }
+
+    let full_address = normalize_text_for_country(&address.country_code, &address.full_address);
+    if full_address == normalized_query || full_address.starts_with(&format!("{normalized_query} "))
+    {
+        return 1;
+    }
+
+    2
 }
 
 fn search_tantivy_streets(
@@ -350,7 +533,10 @@ fn search_tantivy_streets(
         else {
             continue;
         };
-        let key = (address.country_code.clone(), normalize_text(&thoroughfare));
+        let key = (
+            address.country_code.clone(),
+            normalize_text_for_country(&address.country_code, &thoroughfare),
+        );
         if !seen.insert(key) {
             continue;
         }
@@ -504,18 +690,25 @@ mod tests {
             .unwrap();
         reader.reload().unwrap();
         let address_index = AddressIndex {
+            country_code: String::from("SK"),
             _storage: IndexStorage::Persistent {
                 _path: PathBuf::new(),
             },
             reader: reader.clone(),
-            street_reader: reader,
+            street_reader: reader.clone(),
+            postal_reader: reader,
             fields,
         };
 
-        let streets = address_index.search_streets("al", 10).unwrap();
+        let streets = address_index.search_streets("al", None, 10).unwrap();
         assert_eq!(streets.len(), 1);
         assert_eq!(streets[0].formatted, "Alpha Road");
-        assert!(address_index.search_streets("pha", 10).unwrap().is_empty());
+        assert!(
+            address_index
+                .search_streets("pha", None, 10)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -543,19 +736,26 @@ mod tests {
             .unwrap();
         reader.reload().unwrap();
         let address_index = AddressIndex {
+            country_code: String::from("SK"),
             _storage: IndexStorage::Persistent {
                 _path: PathBuf::new(),
             },
             reader: reader.clone(),
-            street_reader: reader,
+            street_reader: reader.clone(),
+            postal_reader: reader,
             fields,
         };
 
-        let streets = address_index.search_streets("b", 2).unwrap();
+        let streets = address_index.search_streets("b", None, 2).unwrap();
         assert_eq!(streets.len(), 1);
         assert_eq!(streets[0].formatted, "Baker Street");
 
-        assert!(address_index.search_streets("z", 2).unwrap().is_empty());
+        assert!(
+            address_index
+                .search_streets("z", None, 2)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -580,15 +780,17 @@ mod tests {
             .unwrap();
         reader.reload().unwrap();
         let address_index = AddressIndex {
+            country_code: String::from("SK"),
             _storage: IndexStorage::Persistent {
                 _path: PathBuf::new(),
             },
             reader: reader.clone(),
-            street_reader: reader,
+            street_reader: reader.clone(),
+            postal_reader: reader,
             fields,
         };
 
-        let streets = address_index.search_streets("Na paseka", 10).unwrap();
+        let streets = address_index.search_streets("Na paseka", None, 10).unwrap();
         assert_eq!(streets.len(), 1);
         assert_eq!(streets[0].formatted, "Na paseká");
     }
