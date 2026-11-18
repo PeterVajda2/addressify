@@ -173,6 +173,7 @@ fn build_street_index_to_dir(country_code: &str, index_dir: &Path) -> AppResult<
     Ok(())
 }
 
+// Retained for the public postal_only API, independently of the street-first UI.
 fn build_postal_index_to_dir(country_code: &str, index_dir: &Path) -> AppResult<()> {
     if index_dir.exists() {
         fs::remove_dir_all(index_dir)?;

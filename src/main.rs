@@ -1,8 +1,10 @@
 mod auth;
+mod billing;
 mod http;
 mod indexing;
 pub mod models;
 mod normalize;
+mod platform;
 mod search;
 
 use std::env;

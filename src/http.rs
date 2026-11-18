@@ -19,6 +19,7 @@ use xitca_web::{
 
 use crate::AppResult;
 use crate::auth::{AuthState, ErrorResponse, error_status, normalize_domain};
+use crate::billing::{Operation, Reservation};
 use crate::models::{SearchResult, StructuredAddress};
 use crate::normalize::{normalize_text, normalize_text_for_country};
 use crate::search::{
@@ -104,6 +105,7 @@ struct AdminApiKey {
     domains: Vec<String>,
     is_active: bool,
     total_requests: i64,
+    billing: Option<crate::billing::Plan>,
     last_used_at: Option<String>,
     last_used_domain: Option<String>,
     last_used_ip: Option<String>,
@@ -154,11 +156,50 @@ pub fn serve_with_state(addr: String, state: Arc<AppState>) -> AppResult<()> {
             "/admin/api/keys/delete",
             post(handler_service(admin_delete_key)),
         )
+        .at(
+            "/account/api/credits",
+            get(handler_service(crate::billing::customer_credits)),
+        )
+        .at(
+            "/account/api/access-requests",
+            post(handler_service(crate::billing::request_access)),
+        )
+        .at(
+            "/admin/api/credits",
+            get(handler_service(crate::billing::admin_credits)),
+        )
+        .at(
+            "/admin/api/billing/plan",
+            post(handler_service(crate::billing::set_plan)),
+        )
+        .at(
+            "/admin/api/access-requests",
+            get(handler_service(crate::billing::access_requests)),
+        )
+        .at(
+            "/admin/api/access-requests/handled",
+            post(handler_service(crate::billing::handle_request)),
+        )
         .at("/health", get(handler_service(health)))
+        .at("/addresswise", get(handler_service(home)))
+        .at("/account", get(handler_service(crate::platform::account)))
+        .at("/docs", get(handler_service(crate::platform::docs)))
+        .at(
+            "/account/api/usage",
+            get(handler_service(crate::platform::customer_usage)),
+        )
+        .at(
+            "/admin/api/usage",
+            get(handler_service(crate::platform::admin_usage)),
+        )
+        .at(
+            "/companywise/api/v1/subjects/{country}/{ico}",
+            get(handler_service(crate::platform::company_lookup)),
+        )
         .at("/search", get(handler_service(search)))
         .at("/suggest", get(handler_service(search)))
         .at("/validate", post(handler_service(validate)))
-        .at("/", get(handler_service(home)))
+        .at("/", get(handler_service(crate::platform::landing)))
         .serve()
         .worker_threads(workers)
         .worker_max_blocking_threads(BLOCKING_THREADS_PER_WORKER)
@@ -330,7 +371,7 @@ async fn admin_delete_key(
     }
 }
 
-fn authorize_admin(
+pub(crate) fn authorize_admin(
     state: &AppState,
     req: &WebRequest<()>,
 ) -> Result<(), (StatusCode, &'static str)> {
@@ -362,7 +403,7 @@ async fn list_admin_keys(auth: &AuthState) -> Result<Vec<AdminApiKey>, String> {
         .pool()
         .ok_or_else(|| String::from("database-backed authentication is disabled"))?;
     let rows = sqlx::query(
-        "select id, api_key, label, is_active, total_requests,
+        "select id, api_key, label, is_active, total_requests, billing_plan, custom_credit_limit,
                 to_char(last_used_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as last_used_at,
                 last_used_domain, last_used_ip,
                 to_char(created_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as created_at,
@@ -384,7 +425,7 @@ async fn admin_key_by_id(auth: &AuthState, id: i64) -> Result<AdminApiKey, Strin
         .pool()
         .ok_or_else(|| String::from("database-backed authentication is disabled"))?;
     let row = sqlx::query(
-        "select id, api_key, label, is_active, total_requests,
+        "select id, api_key, label, is_active, total_requests, billing_plan, custom_credit_limit,
                 to_char(last_used_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as last_used_at,
                 last_used_domain, last_used_ip,
                 to_char(created_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as created_at,
@@ -421,6 +462,10 @@ async fn admin_key_from_row(
         domains,
         is_active: row.get("is_active"),
         total_requests: row.get("total_requests"),
+        billing: crate::billing::plan(
+            row.get::<&str, _>("billing_plan"),
+            row.get("custom_credit_limit"),
+        ),
         last_used_at: row.get("last_used_at"),
         last_used_domain: row.get("last_used_domain"),
         last_used_ip: row.get("last_used_ip"),
@@ -538,34 +583,116 @@ async fn search(
         );
     }
 
-    if let Err(error) = state
+    let key_id = match state
         .auth
         .authorize(req, remote_addr, params.api_key.as_deref())
         .await
     {
-        return json_error(error_status(&error), error);
-    }
+        Ok(id) => id,
+        Err(error) => return json_error(error_status(&error), error),
+    };
 
-    if postal_only {
-        let Some(country_code) = country.as_deref() else {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                ErrorResponse {
-                    error: "country_required",
-                    message: String::from("country is required for postal-code search"),
-                },
-            );
-        };
-        let Some(index) = state.indexes.by_country.get(country_code).cloned() else {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                ErrorResponse {
-                    error: "invalid_country",
-                    message: format!("country `{country_code}` is not indexed"),
-                },
-            );
-        };
-        return match search_postal_codes_async(index, query.clone(), limit).await {
+    let reservation = match Reservation::reserve(
+        &state.auth,
+        key_id,
+        Operation::Autocomplete,
+        params
+            .api_key
+            .as_deref()
+            .is_some_and(|key| key.trim() == state.demo_api_key),
+    )
+    .await
+    {
+        Ok(reservation) => reservation,
+        Err(response) => return *response,
+    };
+    let response = async {
+        if postal_only {
+            let Some(country_code) = country.as_deref() else {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    ErrorResponse {
+                        error: "country_required",
+                        message: String::from("country is required for postal-code search"),
+                    },
+                );
+            };
+            let Some(index) = state.indexes.by_country.get(country_code).cloned() else {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    ErrorResponse {
+                        error: "invalid_country",
+                        message: format!("country `{country_code}` is not indexed"),
+                    },
+                );
+            };
+            return match search_postal_codes_async(index, query.clone(), limit).await {
+                Ok(results) => json_ok(SearchResponse {
+                    query,
+                    country,
+                    count: results.len(),
+                    results,
+                }),
+                Err(error) => json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ErrorResponse {
+                        error: "search_failed",
+                        message: format!("search failed: {error}"),
+                    },
+                ),
+            };
+        }
+
+        if matches!(country.as_deref(), Some("GB" | "IE")) {
+            let Some(tomtom_api_key) = state.tomtom_api_key.as_deref() else {
+                return json_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    ErrorResponse {
+                        error: "remote_search_unavailable",
+                        message: String::from("Remote country search is not configured"),
+                    },
+                );
+            };
+            return match tomtom_search(
+                &state.tomtom_client,
+                tomtom_api_key,
+                country.as_deref().expect("remote country was checked"),
+                &query,
+                limit,
+            )
+            .await
+            {
+                Ok(results) => json_ok(SearchResponse {
+                    query,
+                    country,
+                    count: results.len(),
+                    results,
+                }),
+                Err(error) => {
+                    eprintln!("TomTom remote search failed for {country:?}: {error}");
+                    json_error(
+                        StatusCode::BAD_GATEWAY,
+                        ErrorResponse {
+                            error: "remote_search_failed",
+                            message: String::from(
+                                "Remote country search is temporarily unavailable",
+                            ),
+                        },
+                    )
+                }
+            };
+        }
+
+        match search_indexes_async(
+            state.indexes.clone(),
+            country.clone(),
+            query.clone(),
+            limit,
+            street_only,
+            params.postal_code,
+        )
+        .await
+        {
             Ok(results) => json_ok(SearchResponse {
                 query,
                 country,
@@ -579,71 +706,10 @@ async fn search(
                     message: format!("search failed: {error}"),
                 },
             ),
-        };
+        }
     }
-
-    if matches!(country.as_deref(), Some("GB" | "IE")) {
-        let Some(tomtom_api_key) = state.tomtom_api_key.as_deref() else {
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                ErrorResponse {
-                    error: "remote_search_unavailable",
-                    message: String::from("Remote country search is not configured"),
-                },
-            );
-        };
-        return match tomtom_search(
-            &state.tomtom_client,
-            tomtom_api_key,
-            country.as_deref().expect("remote country was checked"),
-            &query,
-            limit,
-        )
-        .await
-        {
-            Ok(results) => json_ok(SearchResponse {
-                query,
-                country,
-                count: results.len(),
-                results,
-            }),
-            Err(error) => {
-                eprintln!("TomTom remote search failed for {country:?}: {error}");
-                json_error(
-                    StatusCode::BAD_GATEWAY,
-                    ErrorResponse {
-                        error: "remote_search_failed",
-                        message: String::from("Remote country search is temporarily unavailable"),
-                    },
-                )
-            }
-        };
-    }
-
-    match search_indexes_async(
-        state.indexes.clone(),
-        country.clone(),
-        query.clone(),
-        limit,
-        street_only,
-        params.postal_code,
-    )
-    .await
-    {
-        Ok(results) => json_ok(SearchResponse {
-            query,
-            country,
-            count: results.len(),
-            results,
-        }),
-        Err(error) => json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            ErrorResponse {
-                error: "search_failed",
-                message: format!("search failed: {error}"),
-            },
-        ),
-    }
+    .await;
+    reservation.finish(response).await
 }
 
 async fn tomtom_search(
@@ -776,50 +842,69 @@ async fn validate(
         if let Err(message) = validate_request_fields(&request) {
             return validation_error("invalid_request", &message);
         }
-        if let Err(error) = state
+        let key_id = match state
             .auth
             .authorize_without_domain(req, remote_addr, params.api_key.as_deref())
             .await
         {
-            return json_error(error_status(&error), error);
-        }
-        let Some(tomtom_api_key) = state.tomtom_api_key.as_deref() else {
-            return validation_error(
-                "remote_validation_unavailable",
-                "Remote country validation is not configured",
-            );
+            Ok(id) => id,
+            Err(error) => return json_error(error_status(&error), error),
         };
-        let candidates = match tomtom_search(
-            &state.tomtom_client,
-            tomtom_api_key,
-            &country,
-            &validation_query_text(&request),
-            VALIDATION_SUGGESTION_LIMIT,
+        let reservation = match Reservation::reserve(
+            &state.auth,
+            key_id,
+            Operation::Validation,
+            params
+                .api_key
+                .as_deref()
+                .is_some_and(|key| key.trim() == state.demo_api_key),
         )
         .await
         {
-            Ok(candidates) => candidates,
-            Err(error) => {
-                eprintln!("TomTom remote validation failed for {country}: {error}");
-                return json_error(
-                    StatusCode::BAD_GATEWAY,
-                    ErrorResponse {
-                        error: "remote_validation_failed",
-                        message: String::from(
-                            "Remote country validation is temporarily unavailable",
-                        ),
-                    },
-                );
-            }
+            Ok(reservation) => reservation,
+            Err(response) => return *response,
         };
-        let matches = ranked_validation_matches(&request, candidates);
-        let best = matches.first();
-        return json_ok(ValidationResponse {
-            valid: best.is_some_and(|item| address_matches_request(&request, &item.address)),
-            confidence_ratio: best.map_or(0.0, |item| item.confidence_ratio),
-            corrected_address: best.map(|item| item.address.clone()),
-            suggestions: matches,
-        });
+        let response = async {
+            let Some(tomtom_api_key) = state.tomtom_api_key.as_deref() else {
+                return validation_error(
+                    "remote_validation_unavailable",
+                    "Remote country validation is not configured",
+                );
+            };
+            let candidates = match tomtom_search(
+                &state.tomtom_client,
+                tomtom_api_key,
+                &country,
+                &validation_query_text(&request),
+                VALIDATION_SUGGESTION_LIMIT,
+            )
+            .await
+            {
+                Ok(candidates) => candidates,
+                Err(error) => {
+                    eprintln!("TomTom remote validation failed for {country}: {error}");
+                    return json_error(
+                        StatusCode::BAD_GATEWAY,
+                        ErrorResponse {
+                            error: "remote_validation_failed",
+                            message: String::from(
+                                "Remote country validation is temporarily unavailable",
+                            ),
+                        },
+                    );
+                }
+            };
+            let matches = ranked_validation_matches(&request, candidates);
+            let best = matches.first();
+            json_ok(ValidationResponse {
+                valid: best.is_some_and(|item| address_matches_request(&request, &item.address)),
+                confidence_ratio: best.map_or(0.0, |item| item.confidence_ratio),
+                corrected_address: best.map(|item| item.address.clone()),
+                suggestions: matches,
+            })
+        }
+        .await;
+        return reservation.finish(response).await;
     }
     if !state.indexes.has_country(&country) {
         return validation_error(
@@ -830,63 +915,82 @@ async fn validate(
     if let Err(message) = validate_request_fields(&request) {
         return validation_error("invalid_request", &message);
     }
-    if let Err(error) = state
+    let key_id = match state
         .auth
         .authorize_without_domain(req, remote_addr, params.api_key.as_deref())
         .await
     {
-        return json_error(error_status(&error), error);
-    }
+        Ok(id) => id,
+        Err(error) => return json_error(error_status(&error), error),
+    };
 
-    let query = validation_query_text(&request);
-    let index = Arc::clone(
-        state
-            .indexes
-            .by_country
-            .get(&country)
-            .expect("indexed country was checked"),
-    );
-    let candidates =
-        match validation_candidates_async(index, query, VALIDATION_CANDIDATE_LIMIT).await {
-            Ok(candidates) => candidates,
-            Err(error) => {
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    ErrorResponse {
-                        error: "validation_failed",
-                        message: format!("address validation failed: {error}"),
-                    },
-                );
-            }
+    let reservation = match Reservation::reserve(
+        &state.auth,
+        key_id,
+        Operation::Validation,
+        params
+            .api_key
+            .as_deref()
+            .is_some_and(|key| key.trim() == state.demo_api_key),
+    )
+    .await
+    {
+        Ok(reservation) => reservation,
+        Err(response) => return *response,
+    };
+    let response = async {
+        let query = validation_query_text(&request);
+        let index = Arc::clone(
+            state
+                .indexes
+                .by_country
+                .get(&country)
+                .expect("indexed country was checked"),
+        );
+        let candidates =
+            match validation_candidates_async(index, query, VALIDATION_CANDIDATE_LIMIT).await {
+                Ok(candidates) => candidates,
+                Err(error) => {
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        ErrorResponse {
+                            error: "validation_failed",
+                            message: format!("address validation failed: {error}"),
+                        },
+                    );
+                }
+            };
+
+        let matches = ranked_validation_matches(&request, candidates);
+        let Some(best) = matches.first() else {
+            return json_ok(ValidationResponse {
+                valid: false,
+                confidence_ratio: 0.0,
+                corrected_address: None,
+                suggestions: Vec::new(),
+            });
+        };
+        let valid = address_matches_request(&request, &best.address);
+        let confidence_ratio = best.confidence_ratio;
+        let corrected_address = (!valid).then(|| best.address.clone());
+        let suggestions = if confidence_ratio < VALIDATION_SUGGESTION_THRESHOLD {
+            matches
+                .into_iter()
+                .take(VALIDATION_SUGGESTION_LIMIT)
+                .collect()
+        } else {
+            Vec::new()
         };
 
-    let matches = ranked_validation_matches(&request, candidates);
-    let Some(best) = matches.first() else {
-        return json_ok(ValidationResponse {
-            valid: false,
-            confidence_ratio: 0.0,
-            corrected_address: None,
-            suggestions: Vec::new(),
-        });
-    };
-    let valid = address_matches_request(&request, &best.address);
-    let confidence_ratio = best.confidence_ratio;
-    let corrected_address = (!valid).then(|| best.address.clone());
-    let suggestions = if confidence_ratio < VALIDATION_SUGGESTION_THRESHOLD {
-        matches
-            .into_iter()
-            .take(VALIDATION_SUGGESTION_LIMIT)
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    json_ok(ValidationResponse {
-        valid,
-        confidence_ratio,
-        corrected_address,
-        suggestions,
-    })
+        json_ok(ValidationResponse {
+            valid,
+            confidence_ratio,
+            corrected_address,
+            suggestions,
+        })
+    }
+    .await;
+    reservation.finish(response).await
 }
 
 fn validation_error(error: &'static str, message: &str) -> WebResponse {
@@ -1082,18 +1186,18 @@ fn persist_cert(cert_der: &[u8]) -> AppResult<()> {
     Ok(())
 }
 
-fn json_ok<T>(payload: T) -> WebResponse
+pub(crate) fn json_ok<T>(payload: T) -> WebResponse
 where
     T: Serialize,
 {
     json_response(StatusCode::OK, &payload)
 }
 
-fn json_error(status: StatusCode, payload: ErrorResponse) -> WebResponse {
+pub(crate) fn json_error(status: StatusCode, payload: ErrorResponse) -> WebResponse {
     json_response(status, &payload)
 }
 
-fn json_response<T>(status: StatusCode, payload: &T) -> WebResponse
+pub(crate) fn json_response<T>(status: StatusCode, payload: &T) -> WebResponse
 where
     T: Serialize,
 {
@@ -1377,11 +1481,11 @@ mod tests {
         assert!(body.contains("<title>addresswise</title>"));
         assert!(body.contains("id=\"search-form\""));
         assert!(body.contains("id=\"country-input\""));
-        assert!(body.contains("id=\"search-mode\""));
-        assert!(body.contains("value=\"postal-first\""));
+        assert!(!body.contains("id=\"search-mode\""));
+        assert!(!body.contains("postal-first"));
         assert!(body.contains("Select a country"));
-        assert!(body.contains("postalCodeInput.disabled = !countryInput.value"));
-        assert!(body.contains("streetInput.disabled = true"));
+        assert!(body.contains("streetInput.disabled = !countryInput.value"));
+        assert!(body.contains("Filled from your address\" readonly"));
         assert!(body.contains("label for=\"street-input\">Street &amp; house number</label>"));
         assert!(body.contains("A little help finding your way"));
         assert!(body.contains("class=\"brand-mark\""));
@@ -1391,8 +1495,8 @@ mod tests {
         assert!(body.contains("const demoApiKey = \"test-key\""));
         assert!(!body.contains("api-key-input"));
         assert!(body.contains("&street_only"));
-        assert!(body.contains("&postal_only"));
-        assert!(body.contains("selectedPostalCode"));
+        assert!(!body.contains("postal_only"));
+        assert!(!body.contains("selectedPostalCode"));
         assert!(body.contains("selectedStreet"));
         assert!(body.contains("focusStreetInputAtEnd"));
         assert!(body.contains("`${selectedStreet} `"));

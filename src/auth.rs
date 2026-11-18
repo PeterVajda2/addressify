@@ -68,13 +68,13 @@ impl AuthState {
         req: &WebRequest<()>,
         remote_addr: SocketAddr,
         api_key: Option<&str>,
-    ) -> Result<(), ErrorResponse> {
+    ) -> Result<Option<i64>, ErrorResponse> {
         match self {
-            Self::Enabled(service) => {
-                authorize_request(service, req, remote_addr, api_key, true).await
-            }
+            Self::Enabled(service) => authorize_request(service, req, remote_addr, api_key, true)
+                .await
+                .map(Some),
             #[cfg(test)]
-            Self::Disabled => Ok(()),
+            Self::Disabled => Ok(None),
         }
     }
 
@@ -83,13 +83,13 @@ impl AuthState {
         req: &WebRequest<()>,
         remote_addr: SocketAddr,
         api_key: Option<&str>,
-    ) -> Result<(), ErrorResponse> {
+    ) -> Result<Option<i64>, ErrorResponse> {
         match self {
-            Self::Enabled(service) => {
-                authorize_request(service, req, remote_addr, api_key, false).await
-            }
+            Self::Enabled(service) => authorize_request(service, req, remote_addr, api_key, false)
+                .await
+                .map(Some),
             #[cfg(test)]
-            Self::Disabled => Ok(()),
+            Self::Disabled => Ok(None),
         }
     }
 
@@ -123,7 +123,7 @@ async fn authorize_request(
     remote_addr: SocketAddr,
     api_key: Option<&str>,
     require_domain: bool,
-) -> Result<(), ErrorResponse> {
+) -> Result<i64, ErrorResponse> {
     let api_key = api_key
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -143,7 +143,7 @@ async fn authorize_request(
         remote_addr.ip().to_string(),
     );
 
-    Ok(())
+    Ok(api_key_id)
 }
 
 async fn cached_api_key_id(
@@ -265,6 +265,7 @@ async fn flush_usage(service: &AuthService) -> Result<(), sqlx::Error> {
         std::mem::take(&mut *pending_usage)
     };
 
+    let mut first_error = None;
     for (usage, count) in pending_usage {
         if let Err(error) = flush_usage_entry(&service.pool, &usage, count).await {
             *service
@@ -273,16 +274,18 @@ async fn flush_usage(service: &AuthService) -> Result<(), sqlx::Error> {
                 .expect("usage queue lock poisoned")
                 .entry(usage)
                 .or_default() += count;
-            return Err(error);
+            if first_error.is_none() {
+                first_error = Some(error);
+            }
         }
     }
-    Ok(())
+    first_error.map_or(Ok(()), Err)
 }
 
 async fn flush_usage_entry(pool: &PgPool, usage: &UsageKey, count: u64) -> Result<(), sqlx::Error> {
     let count = i64::try_from(count).unwrap_or(i64::MAX);
     let mut transaction = pool.begin().await?;
-    sqlx::query(
+    let updated = sqlx::query(
         "update api_keys
          set total_requests = total_requests + $2,
              last_used_at = now(),
@@ -296,6 +299,11 @@ async fn flush_usage_entry(pool: &PgPool, usage: &UsageKey, count: u64) -> Resul
     .bind(&usage.ip)
     .execute(&mut *transaction)
     .await?;
+    // A revoked/deleted key can still have queued legacy activity. Dropping
+    // that deleted key's batch must not poison retries for surviving keys.
+    if updated.rows_affected() == 0 {
+        return transaction.commit().await;
+    }
 
     sqlx::query(UPSERT_DAILY_USAGE_SQL)
         .bind(usage.api_key_id)
@@ -375,6 +383,42 @@ pub fn db_dir() -> &'static Path {
 mod tests {
     use super::{UPSERT_DAILY_USAGE_SQL, extract_request_domain, normalize_domain};
     use xitca_web::http::{Uri, WebRequest, header};
+
+    #[tokio::test]
+    async fn failed_batches_preserve_all_queued_legacy_usage() {
+        use super::{AuthService, UsageKey, flush_usage};
+        use std::{collections::HashMap, sync::Mutex};
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgresql://unused@127.0.0.1:1/unused")
+            .unwrap();
+        pool.close().await;
+        let service = AuthService {
+            pool,
+            authorized_keys: Mutex::new(HashMap::new()),
+            pending_usage: Mutex::new(HashMap::from([
+                (
+                    UsageKey {
+                        api_key_id: 1,
+                        domain: "a.example".into(),
+                        ip: "127.0.0.1".into(),
+                    },
+                    3,
+                ),
+                (
+                    UsageKey {
+                        api_key_id: 2,
+                        domain: "b.example".into(),
+                        ip: "127.0.0.1".into(),
+                    },
+                    7,
+                ),
+            ])),
+        };
+        assert!(flush_usage(&service).await.is_err());
+        let pending = service.pending_usage.lock().unwrap();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending.values().sum::<u64>(), 10);
+    }
 
     #[test]
     fn normalize_domain_trims_port_case_and_dot() {

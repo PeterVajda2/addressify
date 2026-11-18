@@ -15,7 +15,9 @@ Addresswise is a Rust HTTP API for address autocomplete and validation.
 - Tantivy/PostgreSQL indexing: `src/indexing.rs`
 - Country-specific rules: `src/address_rules.rs`, `src/normalize.rs`
 - Database migrations: `db/`
-- Embedded demo and admin pages: `static/index.html`, `static/admin.html`
+- Shared landing page, usage dashboard and integration guide: `static/platform.html`, `static/account.html`, `static/docs.html`
+- Address demo and shared key administration: `static/index.html`, `static/admin.html`
+- Companywise gateway and shared usage API: `src/platform.rs`
 - ETL binaries: `src/bin/etl_*.rs`
 - ETL documentation: `ETL.md`
 - Deployment documentation: `DEPLOY.md`
@@ -146,7 +148,7 @@ restart; wait for the final health response. The current active production
 country set is:
 
 ```text
-AT BG CH CZ DE DK EE ES FI FR HR HU LT LU LV NL NO PT RS SI SK
+AT BE BG CH CZ DE DK EE ES FI FR HR HU IT LT LU LV NL NO PL PT RS SI SK
 ```
 
 GB and IE are intentionally disabled and their production data and indexes
@@ -154,13 +156,96 @@ were removed on 2026-08-22.
 
 ## Demo and API checks
 
-The public demo is served from embedded `static/index.html`. When changing
+The root URL serves the shared two-product landing page. The address demo is
+served at `/addresswise` from embedded `static/index.html`. When changing
 country options, keep autocomplete and validation selectors consistent and
 verify the live HTML after deployment.
+
+Address entry is street-first only. The full tool has no flow selector or
+editable postal-code lookup field: choose a country, select/type a street,
+then enter the house number and choose the full address. City and postal code
+are read-only derived fields. Keep the postal indexes and existing
+`postal_only`/`postal_code` API parameters for compatibility; the UI does not
+use them. Removing a UI flow does not require rebuilding country indexes.
+
+The homepage embeds compact live demos: address suggestions call `/search`
+and a selected address calls `/validate`; company lookups use the existing
+Companywise gateway with `minimal=true`. The landing handler injects the
+existing public demo key and current index country codes at runtime. Do not
+hardcode keys or execute paid demo requests automatically on page load.
 
 Autocomplete endpoints require an API key and authorized origin; validation
 requires an active API key. Never expose production keys in commands, logs,
 screenshots, source, or this file.
+
+## Shared Companywise platform
+
+- Addresswise owns API keys for both products. Preserve existing address API
+  handlers, authentication rules, responses and counters.
+- Nginx routes `/companywise/api/` through Addresswise on port 8080. The gateway
+  forwards authenticated subject lookups to the loopback Companywise service on
+  port 3001. Other Companywise pages, docs and health still go directly to 3001.
+- Companywise accepts a shared key in `api_key` or a Bearer header. The existing
+  same-origin Companywise browser demo uses the public demo key with its allowed
+  domain checks. Machine clients must supply a key.
+- Successful Companywise lookups are persisted in `companywise_usage_daily`;
+  they do not change legacy `api_keys.total_requests` or address usage rows.
+- `/account/api/usage` returns only the supplied active key's usage.
+  `/admin/api/usage` requires the existing admin secret. Both accept optional
+  `month=YYYY-MM` and default to the database's current calendar month.
+- The new ledger is additive migration `db/0004_companywise_usage.sql`.
+  Deploy it before enabling the Companywise gateway.
+- The initial unified deployment and source snapshot are at
+  `/home/peter/addresswise-platform-releases/20261118-unified` on production.
+  `deploy/rollout-platform.sh` verifies a candidate on port 8081 against live
+  address responses before switching the binary and nginx Companywise snippet.
+  It rolls back the binary/snippet on failure and retains the additive ledger.
+- For subsequent binary-only releases, `deploy/rollout-binary.sh` performs the
+  candidate/legacy-response checks without changing database schema, nginx or
+  indexes. Use a new release directory so previous backups are never replaced.
+- `scripts/verify_platform.py` uses private environment credentials and only
+  creates/modifies/deletes its own temporary keys. Never log its credential env.
+- Shared credits, package pricing, hard monthly limits and CSV export are
+  configured. Online card collection and automatic invoicing are not configured.
+
+## Credit billing
+
+- `src/billing.rs` owns costs (autocomplete 1, validation 3, company 5), package
+  limits (Free 1,000; Starter 100,000 for EUR 9; Growth 1,000,000 for EUR 19),
+  UTC periods, reservations, reports, enquiries and admin activation.
+- Limits are chosen packages, never automatic upgrades or overages. Custom
+  limits require admin approval. Paid access is manually activated after the
+  customer/payment arrangement is confirmed; no card is charged by this code.
+- New and existing keys default to Free when migration 0005 is first applied.
+  The existing public demo key is separate from customer credits, with a shared
+  fair-use budget of 10,000 attempted credits/day (UTC); exhaustion returns
+  `demo_limit_exceeded`. It cannot provide unlimited unmetered production use.
+- Reserve atomically under the key row lock before work. Only 2xx responses
+  charge credits; errors refund. Completed empty/needs-review/cached/repeated
+  requests still count. Abandoned pending reservations expire after five minutes.
+- Exhaustion returns HTTP 429 `credit_limit_exceeded`, including requested,
+  used, reserved, remaining, limit and UTC reset, plus `Retry-After`. Lower-cost
+  requests can still run if they fit. Do not change successful API payloads.
+- `api_credit_months`, `api_credit_reservations`, `api_credit_usage_daily` are
+  the authoritative financial ledger. Legacy address/company counters remain
+  raw activity only and are never retrospectively converted to credits.
+- Financial history survives credential deletion. Snapshot package prices per
+  month; changing a package does not reset usage. Reject downgrades below used
+  plus pending credits. An unrecorded historical month has no package charge.
+- `/account/api/credits` and `/admin/api/credits` accept `month=YYYY-MM`.
+  Admin `/admin/api/billing/plan` is the only package activation endpoint.
+  Public `/account/api/access-requests` stores requests in the admin inbox;
+  submission does not activate paid access or send external messages.
+- Deploy new credit columns/tables using additive migration 0005 before the
+  billing binary. `deploy/rollout-credits.sh` applies it transactionally, tests a
+  candidate, checks costs/concurrent limits over HTTP, then switches with rollback.
+  No index, source-data or nginx changes are required.
+- Run `billing::tests::postgres_credit_accounting` explicitly against a fresh
+  isolated `CREDIT_TEST_DATABASE_URL`. It verifies reservations, refunds,
+  concurrency, expiry, period rollover, plan changes and archived history.
+- `scripts/verify_credits.py` uses only temporary keys it creates. Rollout
+  supplies private environment credentials; it cleans up only its own test
+  financial records, never real customer history.
 
 ## Definition of done
 

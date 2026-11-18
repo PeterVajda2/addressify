@@ -1,5 +1,131 @@
 # Deploying addresswise
 
+## Unified Addresswise / Companywise platform
+
+`https://addresswise.eu/` introduces both products. The original address demo is
+at `/addresswise`; `/search`, `/suggest`, `/validate` and `/health` retain their
+existing behavior. `/account` shows monthly usage for a supplied active API key,
+and `/docs` documents both integrations. `/admin` manages the shared keys and
+exports monthly usage as CSV. Existing address keys work for Companywise too.
+
+Companywise remains an independent data engine and worker deployment from
+`../economic-subjects`. Its public `/companywise/api/v1/subjects/{country}/{ico}`
+route now passes through `src/platform.rs` on Addresswise, then to the internal
+loopback service on port 3001. Nginx must route the whole `/companywise/api/`
+subtree to port 8080 so malformed or unknown API paths cannot bypass auth. Use
+the snippet in `../economic-subjects/deploy/production/nginx-companywise.conf`.
+Other Companywise routes continue to use the original service.
+
+Apply only the additive `db/0004_companywise_usage.sql` before enabling the
+gateway. No address data, country indexes, existing counters, Companywise
+schema, or worker schedule changes are needed. Companywise counts successful
+HTTP responses in its own daily ledger; address counting is unchanged. The
+usage API reads both ledgers and accepts an optional `month=YYYY-MM`.
+
+The initial release is retained on production at
+`/home/peter/addresswise-platform-releases/20261118-unified`, including the
+previous binary/nginx snippet, locally built binaries and source snapshots.
+`deploy/rollout-platform.sh` runs with sudo from a prepared release directory
+containing `addresswise`, the source `db/`, `scripts/verify_platform.py`, and
+`deploy/nginx-companywise.conf`. It applies the new ledger, starts a candidate
+on port 8081, compares 13 legacy address responses against production, verifies
+shared authentication and product accounting, then switches and checks HTTPS.
+Failure restores the previous binary/snippet; the additive ledger is retained.
+Never overwrite a previous release's backups when preparing another deployment.
+
+Verification credentials are loaded privately from `/etc/addresswise.env` into
+the process environment. Do not put them in command arguments or log output.
+`scripts/verify_platform.py --base <candidate> --compare <baseline>` tests
+customer isolation, inactive keys, historical month filters, query/Bearer auth,
+demo access and separate counters. It deletes only the test keys it creates.
+
+This provides shared API access, credit metering, chosen-package limits and
+reporting. Payment collection and automatic invoicing are not configured;
+package requests are reviewed and manually activated by the administrator.
+
+## Credit packages and rollout
+
+Prices are per chosen monthly package: Free includes 1,000 credits for EUR 0;
+Starter includes 100,000 for EUR 9; Growth includes 1,000,000 for EUR 19. Higher
+volumes use a negotiated custom limit. There is no automatic upgrade or overage.
+Every API key shares one allowance across both products; issue one customer key
+for a shared customer allowance. Multiple keys have independent allowances.
+
+Successful autocomplete requests cost 1 credit, address validation 3 and company
+retrieval 5. This includes successful empty results, `valid=false`, repeats and
+cache hits. Authentication, invalid-input, server and quota errors cost zero.
+`/health`, documentation, balance reads and admin operations cost zero. The
+public demo key is separate from customer credits. Public demos share a
+10,000 attempted-credit fair-use allowance per UTC day; exhaustion returns
+HTTP 429 `demo_limit_exceeded` and directs visitors to request their own key.
+
+Billing uses UTC calendar months. A request's cost is reserved atomically before
+work; a successful response finalizes the charge, and errors refund it. Pending
+requests temporarily reduce available credits; abandoned reservations expire
+after five minutes. A request belongs to the period when its reservation was
+created. Excess requests receive HTTP 429 `credit_limit_exceeded` with the
+requested/remaining credit counts and reset date. No request is partially charged.
+
+Apply additive `db/0005_credit_billing.sql` **before** enabling the billing binary.
+Existing keys start on Free with a new credit ledger; old raw counts are not
+back-billed. Existing API success bodies, keys and domain rules remain. The
+authoritative ledger is `api_credit_months`, `api_credit_reservations`, and
+`api_credit_usage_daily`; legacy request tables are not financial totals.
+Financial history is retained after key deletion, and historical periods without
+a recorded package have no inferred package fee. Changes to an active package
+preserve current usage and cannot lower the limit below used/pending credits.
+
+The homepage pricing cards include consumption examples and a calculator.
+`/account` shows credits and accepts package/access enquiries, which appear in
+`/admin`. Paid/custom package requests do not activate themselves. Review the
+request, confirm the customer/payment arrangement, then create/edit the key and
+choose its package in admin. Custom limits are entered explicitly. Mark the
+enquiry handled after provisioning. Card charging and automatic invoice delivery
+are not implemented. Admin CSV export separates credit billing from raw request
+history.
+
+Prepare a new release directory containing the locally built binary, sources,
+`db/0005_credit_billing.sql`, `scripts/verify_platform.py`,
+`scripts/verify_credits.py` and `deploy/rollout-credits.sh`. Run the rollout with
+sudo there. It applies only this migration in one transaction, verifies the
+candidate against production, tests 1/3/5 costs and concurrent limits over HTTP,
+then switches and repeats public checks. Binary rollback retains the additive
+ledger; no address data, country indexes or nginx configuration is modified.
+
+The isolated PostgreSQL integration test is intentionally opt-in:
+
+```sh
+CREDIT_TEST_DATABASE_URL=postgresql://user@127.0.0.1:55439/test_database \
+  cargo test billing::tests::postgres_credit_accounting -- --ignored
+```
+
+Never point that test at a production/customer database. Rollout HTTP checks use
+only temporary keys they create; `DATABASE_URL` is loaded privately for cleanup
+of those keys' test financial rows. Real customer financial history is retained.
+
+The homepage includes live address autocomplete/validation and a compact
+Companywise lookup. It uses the existing public demo key and active country
+list at runtime; it makes no lookup requests until a visitor interacts.
+"Try full Addresswise" and "Try full Companywise" open the complete tools.
+
+Addresswise address entry uses only the street-first flow. The full tool has
+no flow selector: a country enables street input; selecting a street lets the
+visitor append a house number; selecting a full address fills the read-only
+city and postal code. The frontend has no postal lookup requests, postal-code
+selection state or postal filtering. Street suggestions use the bare
+`street_only` flag, followed by normal address search when a number is entered.
+The existing API still supports postal lookup/filter parameters, so its
+postal indexes are retained. This UI change needs only a binary deployment,
+without index rebuilds or data/schema changes.
+
+For a subsequent frontend/binary-only release, prepare a **new** release
+directory with the locally built `addresswise`,
+`scripts/verify_platform.py`, and `deploy/rollout-binary.sh`, then run the
+rollout script there with sudo. It starts a candidate on 8081, checks the
+legacy API and shared platform, switches the binary and checks public HTTPS.
+It preserves the previous binary for rollback and makes no schema, nginx,
+index or Companywise deployment changes.
+
 ## Runtime model
 
 The binary now supports three modes:

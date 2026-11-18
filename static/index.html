@@ -269,18 +269,12 @@
 </head>
 <body>
   <main>
+    <nav aria-label="Product navigation" style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-bottom:2rem;font-size:.85rem"><a href="/">⌖ Addresswise platform</a><a href="/companywise/">Company checks ↗</a><a href="/docs#addresswise">API guide ↗</a><a href="/account">API usage ↗</a></nav>
     <header class="hero">
       <div class="brand-mark" aria-hidden="true">⌖</div>
       <p class="eyebrow">addresswise</p>
       <h1>A little help finding your way</h1>
-      <p class="intro" id="search-intro">Start with a street, or switch to postal code first when that is more convenient.</p>
-      <div class="field demo-mode">
-        <label for="search-mode">Search flow</label>
-        <select id="search-mode">
-          <option value="street-first" selected>Street first</option>
-          <option value="postal-first">Postal code first</option>
-        </select>
-      </div>
+      <p class="intro">Choose a country, start typing a street, then add the house number. City and postal code fill in from your selected address.</p>
     </header>
     <form id="search-form" aria-label="Address lookup">
         <div class="field">
@@ -317,7 +311,7 @@
         </div>
         <div class="field field-street">
           <label for="street-input">Street &amp; house number</label>
-          <input id="street-input" name="q" type="text" placeholder="Select a postal code first" autocomplete="street-address" spellcheck="false" disabled>
+          <input id="street-input" name="q" type="text" placeholder="Select a country first" autocomplete="street-address" spellcheck="false" disabled>
           <section class="panel" aria-label="Suggestions">
             <ul class="suggestions" id="results"></ul>
           </section>
@@ -328,9 +322,9 @@
           <label for="city-input">City</label>
           <input id="city-input" name="city" type="text" readonly>
         </div>
-        <div class="field field-postal">
+        <div class="field">
           <label for="postal-code-input">Postal code</label>
-          <input id="postal-code-input" name="postal_code" type="text" placeholder="Select a country first" autocomplete="postal-code" spellcheck="false" disabled>
+          <input id="postal-code-input" name="postal_code" type="text" placeholder="Filled from your address" readonly>
         </div>
       </div>
     </form>
@@ -396,8 +390,6 @@
   <script>
     const form = document.getElementById("search-form");
     const countryInput = document.getElementById("country-input");
-    const searchModeInput = document.getElementById("search-mode");
-    const searchIntro = document.getElementById("search-intro");
     const streetInput = document.getElementById("street-input");
     const cityInput = document.getElementById("city-input");
     const postalCodeInput = document.getElementById("postal-code-input");
@@ -423,13 +415,9 @@
     let requestSequence = 0;
     let latestResults = [];
     let latestResultsAreStreetOnly = false;
-    let latestResultsArePostalOnly = false;
-    let selectedPostalCode = "";
-    let postalFirst = false;
-    let selectedStreet = "";
     let validationController = null;
 
-    async function runSearch(query, country, streetOnly, postalOnly, postalCode) {
+    async function runSearch(query, country, streetOnly) {
       if (activeController) {
         activeController.abort();
       }
@@ -442,9 +430,7 @@
         api_key: demoApiKey,
       });
       const streetOnlyFlag = streetOnly ? "&street_only" : "";
-      const postalOnlyFlag = postalOnly ? "&postal_only" : "";
-      if (postalCode) params.set("postal_code", postalCode);
-      const response = await fetch(`${apiBaseUrl}/search?${params.toString()}${streetOnlyFlag}${postalOnlyFlag}`, {
+      const response = await fetch(`${apiBaseUrl}/search?${params.toString()}${streetOnlyFlag}`, {
         method: "GET",
         cache: "no-store",
         credentials: "same-origin",
@@ -479,9 +465,9 @@
       postalCodeInput.value = address.postal_code || "";
     }
 
-    function clearStructuredFields(preservePostal = false) {
+    function clearStructuredFields() {
       cityInput.value = "";
-      if (!preservePostal) postalCodeInput.value = "";
+      postalCodeInput.value = "";
     }
 
     function focusStreetInputAtEnd() {
@@ -493,7 +479,6 @@
     function clearSuggestions() {
       latestResults = [];
       latestResultsAreStreetOnly = false;
-      latestResultsArePostalOnly = false;
       results.innerHTML = "";
       panel.classList.remove("visible");
     }
@@ -528,16 +513,15 @@
       return body;
     }
 
-    function renderResults(payload, streetOnly, postalOnly) {
+    function renderResults(payload, streetOnly) {
       const addressResults = payload.results.filter((result) =>
         Boolean(buildHouseNumber(result.address)),
       );
-      const visibleResults = !postalOnly && !streetOnly && addressResults.length
+      const visibleResults = !streetOnly && addressResults.length
         ? addressResults
         : payload.results;
       latestResults = visibleResults;
       latestResultsAreStreetOnly = streetOnly;
-      latestResultsArePostalOnly = postalOnly;
       if (!visibleResults.length) {
         panel.classList.remove("visible");
         results.innerHTML = "";
@@ -547,9 +531,7 @@
       panel.classList.add("visible");
       results.innerHTML = visibleResults
         .map((result, index) => {
-          const street = postalOnly
-            ? (result.address.postal_code || result.address.full_address)
-            : (buildStreetLine(result.address) || result.address.full_address);
+          const street = buildStreetLine(result.address) || result.address.full_address;
           const locality = [
             result.address.locality || result.address.dependent_locality || "",
             result.address.postal_code || "",
@@ -562,9 +544,10 @@
         .join("");
     }
 
-    async function triggerSearch(query, postalOnly = false) {
+    async function triggerSearch(query) {
+      const currentRequest = ++requestSequence;
       const country = countryInput.value;
-      if (!country || (!postalOnly && postalFirst && !selectedPostalCode)) {
+      if (!country) {
         return;
       }
       if (!query) {
@@ -572,20 +555,17 @@
           activeController.abort();
           activeController = null;
         }
-        if (postalOnly) selectedPostalCode = "";
-        selectedStreet = "";
         clearSuggestions();
         clearStructuredFields();
         return;
       }
 
-      const currentRequest = ++requestSequence;
-      const streetOnly = !postalOnly && !/\d/.test(query);
+      const streetOnly = !/\d/.test(query);
 
       try {
-        const payload = await runSearch(query, country, streetOnly, postalOnly, selectedPostalCode);
+        const payload = await runSearch(query, country, streetOnly);
         if (currentRequest === requestSequence) {
-          renderResults(payload, streetOnly, postalOnly);
+          renderResults(payload, streetOnly);
         }
       } catch (error) {
         if (error.name === "AbortError") {
@@ -646,20 +626,7 @@
       }
     });
 
-    streetInput.addEventListener("input", () => {
-      cityInput.value = "";
-      scheduleSearch();
-    });
-
-    postalCodeInput.addEventListener("input", () => {
-      if (!postalFirst) return;
-      selectedPostalCode = "";
-      streetInput.disabled = true;
-      cityInput.value = "";
-      schedulePostalSearch();
-    });
-
-    countryInput.addEventListener("change", () => {
+    function cancelSearch() {
       if (pendingTimer) {
         clearTimeout(pendingTimer);
         pendingTimer = null;
@@ -669,26 +636,24 @@
         activeController = null;
       }
       ++requestSequence;
-      selectedStreet = "";
-      selectedPostalCode = "";
-      streetInput.value = "";
-      postalCodeInput.value = "";
-      postalCodeInput.disabled = !countryInput.value || !postalFirst;
-      streetInput.disabled = !countryInput.value || postalFirst;
-      streetInput.placeholder = postalFirst ? "Select a postal code first" : "Type a street or address";
       clearSuggestions();
+    }
+
+    streetInput.addEventListener("input", () => {
+      cancelSearch();
       clearStructuredFields();
-      if (countryInput.value) {
-        (postalFirst ? postalCodeInput : streetInput).focus();
-      }
+      scheduleSearch();
     });
 
-    searchModeInput.addEventListener("change", () => {
-      postalFirst = searchModeInput.value === "postal-first";
-      searchIntro.textContent = postalFirst
-        ? "Choose a postal code first, then select a street and house number."
-        : "Start with a street, then select the address that feels right.";
-      countryInput.dispatchEvent(new Event("change"));
+    countryInput.addEventListener("change", () => {
+      cancelSearch();
+      streetInput.value = "";
+      streetInput.disabled = !countryInput.value;
+      streetInput.placeholder = countryInput.value ? "Type a street, then add the house number" : "Select a country first";
+      clearStructuredFields();
+      if (countryInput.value) {
+        streetInput.focus();
+      }
     });
 
     document.addEventListener("click", (event) => {
@@ -696,7 +661,7 @@
         return;
       }
 
-      if (!event.target.closest(".field-street") && !event.target.closest(".field-postal")) {
+      if (!event.target.closest(".field-street")) {
         clearSuggestions();
       }
     });
@@ -715,39 +680,18 @@
 
       event.stopPropagation();
 
-      if (latestResultsArePostalOnly) {
-        selectedPostalCode = result.address.postal_code || "";
-        postalCodeInput.value = selectedPostalCode;
-        postalCodeInput.disabled = false;
-        streetInput.disabled = !selectedPostalCode;
-        streetInput.placeholder = "Type a street or address";
-        streetInput.value = "";
-        clearStructuredFields(true);
-        clearSuggestions();
-        streetInput.focus();
-        return;
-      }
-
       const hasHouseNumber = Boolean(buildHouseNumber(result.address));
       if (latestResultsAreStreetOnly && !hasHouseNumber) {
-        selectedStreet = result.address.thoroughfare || result.formatted;
+        const selectedStreet = result.address.thoroughfare || result.formatted;
         streetInput.value = `${selectedStreet} `;
         clearStructuredFields();
       } else {
-        selectedStreet = result.address.thoroughfare || "";
         fillStructuredFields(result);
       }
       clearSuggestions();
       focusStreetInputAtEnd();
     });
 
-    function schedulePostalSearch() {
-      if (pendingTimer) clearTimeout(pendingTimer);
-      pendingTimer = setTimeout(() => {
-        pendingTimer = null;
-        void triggerSearch(postalCodeInput.value.trim(), true);
-      }, 120);
-    }
   </script>
 </body>
 </html>

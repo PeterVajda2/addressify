@@ -5,12 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>addresswise — API key admin</title>
   <style>
+    [hidden] { display:none!important; }
     :root { color-scheme: light; --ink:#151515; --muted:#626262; --line:#d8d8d8; --panel:#fff; --bg:#f4f4f2; --danger:#9d2020; }
     * { box-sizing: border-box; } body { margin:0; padding:2rem; color:var(--ink); background:var(--bg); font:16px/1.45 system-ui,sans-serif; }
     main { max-width:72rem; margin:auto; } h1 { margin:0; font:700 2rem/1 Georgia,serif; } .intro { color:var(--muted); margin:.35rem 0 1.5rem; }
     .toolbar, .key-head, .actions { display:flex; gap:.7rem; align-items:center; flex-wrap:wrap; } .toolbar { margin-bottom:1.25rem; }
     button { border:1px solid var(--ink); background:var(--ink); color:#fff; padding:.55rem .8rem; font:inherit; cursor:pointer; } button.secondary { background:#fff; color:var(--ink); border-color:var(--line); } button.danger { color:var(--danger); border-color:#e4baba; background:#fff; }
-    input, textarea { width:100%; border:1px solid #aaa; padding:.55rem; font:inherit; } textarea { min-height:4.25rem; resize:vertical; } label { display:grid; gap:.3rem; font-size:.85rem; font-weight:650; }
+    select { width:100%; padding:.55rem; font:inherit; border:1px solid #aaa; background:#fff; } input, textarea { width:100%; border:1px solid #aaa; padding:.55rem; font:inherit; } textarea { min-height:4.25rem; resize:vertical; } label { display:grid; gap:.3rem; font-size:.85rem; font-weight:650; }
     .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.8rem; } .full { grid-column:1/-1; }
     .key { background:var(--panel); border:1px solid var(--line); padding:1rem; margin:.8rem 0; } .key-head { justify-content:space-between; } .key h2 { margin:0; font-size:1.1rem; } .meta { color:var(--muted); font-size:.88rem; margin:.45rem 0 1rem; }
     code { overflow-wrap:anywhere; background:#f3f3f3; padding:.15rem .3rem; } .status { margin-left:auto; padding:.15rem .45rem; font-size:.78rem; font-weight:700; text-transform:uppercase; background:#e5f2e6; } .status.off { background:#f4dddd; color:var(--danger); }
@@ -20,10 +21,13 @@
 </head>
 <body>
   <main>
-    <h1>API key administration</h1>
-    <p class="intro">Create, restrict, suspend, and remove API keys. Changes apply immediately.</p>
+    <p><a href="/">← Addresswise platform</a></p><h1>Shared API key administration</h1>
+    <p class="intro">Manage keys shared by Addresswise and Companywise. Domain restrictions apply to address autocomplete. Existing Addresswise counters remain address-only.</p>
     <div class="toolbar"><button id="login">Set admin key</button><button id="new-key">Create API key</button><button class="secondary" id="reload">Reload</button></div>
     <p id="message" class="message" role="status"></p>
+    <section aria-labelledby="credit-title"><h2 id="credit-title">Credit billing &amp; hard limits</h2><p>Autocomplete 1 · validation 3 · company 5. Successful requests only. Calendar months use UTC. Package changes never reset used credits.</p><div class="toolbar"><button class="secondary" id="load-credits">Load credit balances</button><button class="secondary" id="export-credits" disabled>Export credit CSV</button></div><p id="credit-message" role="status"></p><div style="overflow:auto"><table style="width:100%;text-align:left"><thead><tr><th>Customer / key</th><th>Package</th><th>Monthly EUR</th><th>Used</th><th>Pending</th><th>Remaining</th></tr></thead><tbody id="credit-balances"></tbody></table></div></section>
+    <section><h2>Access &amp; sales requests</h2><button class="secondary" id="load-requests">Load requests</button><p id="request-message" role="status"></p><div id="access-requests"></div></section>
+    <section aria-labelledby="usage-title"><h2 id="usage-title">Raw request history by product</h2><div class="toolbar"><label>Billing month <input id="billing-month" type="month" min="2000-01" max="9999-12" required></label><button class="secondary" id="load-usage">Load usage</button><button class="secondary" id="export-usage" disabled>Export request CSV</button></div><p id="usage-message" role="status"></p><div style="overflow:auto"><table style="width:100%;text-align:left"><thead><tr><th>Key / customer</th><th>Addresswise</th><th>Companywise</th></tr></thead><tbody id="usage-rows"></tbody></table></div></section>
     <section id="keys" aria-live="polite"></section>
   </main>
   <dialog id="editor">
@@ -33,6 +37,7 @@
       <div class="grid">
         <label class="full">Label <input id="label" maxlength="200" placeholder="Customer or site name"></label>
         <label class="full">Allowed domains <textarea id="domains" required placeholder="example.com&#10;www.example.com"></textarea></label>
+        <label class="full">Monthly package <select id="billing-plan"><option value="free">Free · 1,000 credits · €0/month</option><option value="starter">Starter · 100,000 credits · €9/month</option><option value="growth">Growth · 1,000,000 credits · €19/month</option><option value="custom">Custom · agreed hard limit</option></select></label><label class="full" id="custom-limit-label" hidden>Custom monthly hard limit <input id="custom-limit" type="number" min="1" step="1"></label><p class="full">Only activate a paid package after confirming the customer’s choice and payment arrangement. No card is charged by this action. Existing monthly usage is retained.</p>
         <label id="active-label" class="full"><span><input id="active" type="checkbox" checked> Key is active</span></label>
       </div>
       <p id="form-message" class="message"></p>
@@ -56,7 +61,7 @@
       keys.replaceChildren(...apiKeys.map(key => {
         const item = document.createElement("article"); item.className = "key";
         item.innerHTML = `<div class="key-head"><h2>${escapeHtml(key.label || "Unlabelled key")}</h2><span class="status ${key.is_active ? "" : "off"}">${key.is_active ? "active" : "disabled"}</span></div>
-          <p><code>${escapeHtml(key.api_key)}</code></p><p class="meta">${key.total_requests.toLocaleString()} requests · created ${text(key.created_at)} · last used ${text(key.last_used_at)}${key.last_used_domain ? ` from ${escapeHtml(key.last_used_domain)}` : ""}</p>
+          <p><code>${escapeHtml(key.api_key)}</code></p><p class="meta">${key.total_requests.toLocaleString()} legacy address requests · ${escapeHtml(key.billing?.name||"Free")} package · ${(key.billing?.credit_limit||1000).toLocaleString()} credits/month · created ${text(key.created_at)} · last used ${text(key.last_used_at)}${key.last_used_domain ? ` from ${escapeHtml(key.last_used_domain)}` : ""}</p>
           <div class="actions"><button class="secondary">Edit</button><button class="danger">Delete</button></div>`;
         item.querySelector(".secondary").onclick = () => openEditor(key);
         item.querySelector(".danger").onclick = () => deleteKey(key);
@@ -73,7 +78,7 @@
     function openEditor(key) {
       byId("editor-title").textContent = key ? "Edit API key" : "Create API key";
       byId("key-id").value = key?.id || ""; byId("label").value = key?.label || ""; byId("domains").value = key?.domains.join("\n") || "";
-      byId("active").checked = key?.is_active ?? true; byId("active-label").classList.toggle("hidden", !key); formMessage.textContent = ""; editor.showModal();
+      byId("billing-plan").value=key?.billing?.id||"free";byId("custom-limit").value=key?.billing?.id==="custom"?key.billing.credit_limit:"";updateCustomLimit();byId("active").checked = key?.is_active ?? true; byId("active-label").classList.toggle("hidden", !key); formMessage.textContent = ""; editor.showModal();
     }
     async function deleteKey(key) {
       if (!confirm(`Delete ${key.label || key.api_key}? This cannot be undone.`)) return;
@@ -84,9 +89,18 @@
     byId("new-key").onclick = () => openEditor(); byId("reload").onclick = load; byId("cancel").onclick = () => editor.close();
     byId("key-form").onsubmit = async event => { event.preventDefault(); formMessage.textContent = ""; const id = byId("key-id").value;
       const payload = { label:byId("label").value, domains:byId("domains").value.split(/[\n,]/).map(x => x.trim()).filter(Boolean), is_active:byId("active").checked };
-      try { await api(id ? "/admin/api/keys/update" : "/admin/api/keys/create", { method:"POST", body:JSON.stringify(id ? {...payload, id:Number(id)} : payload) }); editor.close(); await load(); }
+      try { const saved=await api(id ? "/admin/api/keys/update" : "/admin/api/keys/create", { method:"POST", body:JSON.stringify(id ? {...payload, id:Number(id)} : payload) });if(!id)byId('key-id').value=saved.id;await api('/admin/api/billing/plan',{method:'POST',body:JSON.stringify({id:saved.id,plan:byId('billing-plan').value,custom_credit_limit:byId('billing-plan').value==='custom'?Number(byId('custom-limit').value):null})});editor.close(); await load(); }
       catch (error) { formMessage.textContent = error.message; }
     };
+    let usageRows=[];
+    const billingMonth=byId('billing-month');const billingNow=new Date();billingMonth.value=billingNow.getUTCFullYear()+'-'+String(billingNow.getUTCMonth()+1).padStart(2,'0');
+    byId('load-usage').onclick=async()=>{byId('usage-message').textContent='Loading…';byId('export-usage').disabled=true;byId('usage-rows').replaceChildren();try{usageRows=await api('/admin/api/usage?month='+encodeURIComponent(billingMonth.value));const totals=new Map();for(const row of usageRows){if(!totals.has(row.api_key_id))totals.set(row.api_key_id,{label:row.label||'Key '+row.api_key_id,addresswise:0,companywise:0});totals.get(row.api_key_id)[row.product]+=row.requests}for(const row of totals.values()){const tr=document.createElement('tr');for(const value of [row.label,row.addresswise.toLocaleString(),row.companywise.toLocaleString()]){const td=document.createElement('td');td.textContent=value;tr.append(td)}byId('usage-rows').append(tr)}byId('usage-message').textContent=usageRows.length?'Usage loaded.':'No usage recorded for this month.';byId('export-usage').disabled=!usageRows.length}catch(error){byId('usage-message').textContent=error.message}};
+    byId('export-usage').onclick=()=>{const csvCell=value=>'"'+String(value??'').replace(/^[=+@\t\r-]/,"'$&").replaceAll('"','""')+'"';const csv=[['api_key_id','label','product','date','requests'],...usageRows.map(row=>[row.api_key_id,row.label,row.product,row.date,row.requests])].map(row=>row.map(csvCell).join(',')).join('\r\n');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const link=document.createElement('a');link.href=url;link.download='addresswise-usage-'+billingMonth.value+'.csv';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
+    function updateCustomLimit(){const custom=byId('billing-plan').value==='custom';byId('custom-limit-label').hidden=!custom;byId('custom-limit').required=custom;}byId('billing-plan').onchange=updateCustomLimit;
+    let creditRows=[];
+    byId('load-credits').onclick=async()=>{byId('credit-message').textContent='Loading…';byId('export-credits').disabled=true;byId('credit-balances').replaceChildren();try{creditRows=await api('/admin/api/credits?month='+encodeURIComponent(billingMonth.value));for(const row of creditRows){const tr=document.createElement('tr');for(const value of [(row.label||'Key '+row.api_key_id)+(row.archived?' (deleted key)':'')+(row.is_demo?' (public demo)':''),row.plan.name,row.plan.monthly_price_eur===null?'Agreed':row.plan.monthly_price_eur,row.used_credits,row.reserved_credits,row.is_demo?'Exempt':row.remaining_credits]){const td=document.createElement('td');td.textContent=String(value);tr.append(td)}byId('credit-balances').append(tr)}byId('credit-message').textContent='Credit balances loaded. Legacy raw request counters are not invoices. Payment collection is manual.';byId('export-credits').disabled=!creditRows.length}catch(error){byId('credit-message').textContent=error.message}};
+    byId('export-credits').onclick=()=>{const cell=value=>'"'+String(value??'').replace(/^[=+@\t\r-]/,"'$&").replaceAll('"','""')+'"';const columns=['api_key_id','customer','month','package','monthly_price_eur','used_credits','reserved_credits','credit_limit','remaining_credits','demo_exempt','archived'];const csv=[columns,...creditRows.map(row=>[row.api_key_id,row.label,row.month,row.plan.id,row.plan.monthly_price_eur,row.used_credits,row.reserved_credits,row.plan.credit_limit,row.remaining_credits,row.is_demo,row.archived])].map(row=>row.map(cell).join(',')).join('\r\n');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const link=document.createElement('a');link.href=url;link.download='addresswise-credits-'+billingMonth.value+'.csv';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
+    byId('load-requests').onclick=async()=>{const container=byId('access-requests');container.replaceChildren();byId('request-message').textContent='Loading…';try{const rows=await api('/admin/api/access-requests');for(const row of rows){const article=document.createElement('article');article.className='key';for(const text of [row.name+' · '+row.email,row.domain+' · '+row.plan+' · '+row.state+' · '+row.created_at,row.message,row.api_key_id?'Existing key ID: '+row.api_key_id:'New API access request']){const p=document.createElement('p');p.textContent=text;article.append(p)}if(row.state==='pending'){const provision=document.createElement('button');provision.className='secondary';provision.textContent=row.api_key_id?'Edit customer package':'Prepare customer key';provision.onclick=()=>{const existing=apiKeys.find(key=>key.id===row.api_key_id);openEditor(existing);if(!existing){byId('label').value=row.name+' · '+row.email;byId('domains').value=row.domain}byId('billing-plan').value=row.plan;updateCustomLimit()};const done=document.createElement('button');done.className='secondary';done.textContent='Mark handled';done.onclick=async()=>{try{await api('/admin/api/access-requests/handled',{method:'POST',body:JSON.stringify({id:row.id})});byId('load-requests').click()}catch(error){byId('request-message').textContent=error.message}};article.append(provision,document.createTextNode(' '),done)}container.append(article)}byId('request-message').textContent=rows.length?'Requests loaded. Provision/confirm access, then mark the request handled.':'No requests yet.'}catch(error){byId('request-message').textContent=error.message}};
     load();
   </script>
 </body>
