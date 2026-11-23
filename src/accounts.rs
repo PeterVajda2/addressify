@@ -11,7 +11,7 @@ use argon2::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{
     net::SocketAddr,
     sync::{Arc, LazyLock},
@@ -21,6 +21,10 @@ use xitca_web::{
     handler::{json::Json, query::Query, state::StateRef},
     http::{StatusCode, WebRequest, WebResponse, header},
 };
+
+mod mail;
+use mail::Purpose;
+pub(crate) use mail::enabled as email_enabled;
 
 pub const TERMS_VERSION: &str = "2026-11-23-pricing";
 const COOKIE: &str = "__Host-addresswise_session";
@@ -286,6 +290,9 @@ pub async fn register(
     if !has_account_origin(req) {
         return invalid_origin();
     }
+    if mail::configured() && !email_enabled() {
+        return unavailable();
+    }
     let Some(pool) = state.auth.pool() else {
         return unavailable();
     };
@@ -299,7 +306,9 @@ pub async fn register(
     {
         return r;
     }
-    let Some(email) = email(&request.email) else {
+    let Some(email) = email(&request.email)
+        .filter(|email| !email_enabled() || email.parse::<lettre::Address>().is_ok())
+    else {
         return error(
             StatusCode::BAD_REQUEST,
             "invalid_registration",
@@ -401,22 +410,23 @@ pub async fn register(
         }
     };
     let raw = token();
-    let key = crate::http::generate_api_key();
+    let confirmation = email_enabled().then(token);
     let result: Result<(), sqlx::Error> = async {
         let mut tx = pool.begin().await?;
         let owner = sqlx::query_scalar::<_, i64>(
             "INSERT INTO customer_accounts(
                 email,name,password_hash,domain,requested_plan,terms_version,terms_language,
-                business_address,company_country,ico,vat_id,street,city,postal_code
-            ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id",
+                business_address,company_country,ico,vat_id,street,city,postal_code,
+                email_confirmation_required
+            ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id",
         )
-        .bind(email)
+        .bind(&email)
         .bind(request.name.trim())
         .bind(hash)
         .bind(&domain)
         .bind(request.plan)
         .bind(TERMS_VERSION)
-        .bind(request.language)
+        .bind(&request.language)
         .bind(business_address)
         .bind(country)
         .bind(ico)
@@ -424,25 +434,14 @@ pub async fn register(
         .bind(street)
         .bind(city)
         .bind(postal)
+        .bind(confirmation.is_some())
         .fetch_one(&mut *tx)
         .await?;
-        let key_id = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO api_keys(api_key,label,billing_plan) VALUES($1,$2,'free') RETURNING id",
-        )
-        .bind(key)
-        .bind(format!("{} · {}", request.name.trim(), domain))
-        .fetch_one(&mut *tx)
-        .await?;
-        sqlx::query("INSERT INTO api_key_domains(api_key_id,domain) VALUES($1,$2)")
-            .bind(key_id)
-            .bind(domain)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("UPDATE customer_accounts SET api_key_id=$2 WHERE id=$1")
-            .bind(owner)
-            .bind(key_id)
-            .execute(&mut *tx)
-            .await?;
+        if let Some(confirmation) = &confirmation {
+            mail::store(&mut tx, owner, Purpose::Confirm, confirmation).await?;
+            return tx.commit().await;
+        }
+        provision_key(&mut tx, owner, request.name.trim(), &domain).await?;
         sqlx::query("INSERT INTO customer_sessions(token_hash,customer_id) VALUES($1,$2)")
             .bind(digest(&raw))
             .bind(owner)
@@ -452,14 +451,29 @@ pub async fn register(
     }
     .await;
     match result {
-        Ok(()) => session_cookie(
-            response(
-                StatusCode::CREATED,
-                serde_json::json!({"created":true,"redirect":"/account","csrf_token":csrf(&raw)}),
+        Ok(()) => match confirmation {
+            Some(confirmation) => {
+                mail::send(
+                    pool.clone(),
+                    email,
+                    request.language,
+                    Purpose::Confirm,
+                    confirmation,
+                );
+                response(
+                    StatusCode::CREATED,
+                    serde_json::json!({"confirmation_required":true}),
+                )
+            }
+            None => session_cookie(
+                response(
+                    StatusCode::CREATED,
+                    serde_json::json!({"created":true,"redirect":"/account","csrf_token":csrf(&raw)}),
+                ),
+                &raw,
+                false,
             ),
-            &raw,
-            false,
-        ),
+        },
         Err(e)
             if e.as_database_error()
                 .is_some_and(|e| e.is_unique_violation()) =>
@@ -473,6 +487,280 @@ pub async fn register(
         Err(e) => database(e),
     }
 }
+async fn provision_key(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: i64,
+    name: &str,
+    domain: &str,
+) -> Result<(), sqlx::Error> {
+    let key_id = sqlx::query_scalar::<_, i64>(
+        "INSERT INTO api_keys(api_key,label,billing_plan) VALUES($1,$2,'free') RETURNING id",
+    )
+    .bind(crate::http::generate_api_key())
+    .bind(format!("{name} · {domain}"))
+    .fetch_one(&mut **tx)
+    .await?;
+    sqlx::query("INSERT INTO api_key_domains(api_key_id,domain) VALUES($1,$2)")
+        .bind(key_id)
+        .bind(domain)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("UPDATE customer_accounts SET api_key_id=$2 WHERE id=$1")
+        .bind(owner)
+        .bind(key_id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct MailRequest {
+    email: String,
+    language: String,
+}
+
+pub async fn resend_confirmation(
+    StateRef(state): StateRef<'_, Arc<AppState>>,
+    Json(request): Json<MailRequest>,
+    req: &WebRequest<()>,
+    remote: SocketAddr,
+) -> WebResponse {
+    request_mail(state, request, req, remote, Purpose::Confirm).await
+}
+
+pub async fn forgot_password(
+    StateRef(state): StateRef<'_, Arc<AppState>>,
+    Json(request): Json<MailRequest>,
+    req: &WebRequest<()>,
+    remote: SocketAddr,
+) -> WebResponse {
+    request_mail(state, request, req, remote, Purpose::Reset).await
+}
+
+async fn request_mail(
+    state: &AppState,
+    request: MailRequest,
+    req: &WebRequest<()>,
+    remote: SocketAddr,
+    purpose: Purpose,
+) -> WebResponse {
+    if !has_account_origin(req) {
+        return invalid_origin();
+    }
+    let Some(pool) = state.auth.pool().filter(|_| email_enabled()) else {
+        return unavailable();
+    };
+    let accepted = || response(StatusCode::ACCEPTED, serde_json::json!({"accepted":true}));
+    if let Some(r) = limit_response(
+        pool,
+        &format!("email-ip:{}", client_bucket(req, remote)),
+        20,
+        900,
+    )
+    .await
+    {
+        return r;
+    }
+    let Some(email) = email(&request.email) else {
+        return accepted();
+    };
+    if let Some(r) = limit_response(
+        pool,
+        &format!("email-{}:{}", purpose.name(), digest(&email)),
+        3,
+        900,
+    )
+    .await
+    {
+        return if r.status() == StatusCode::TOO_MANY_REQUESTS {
+            accepted()
+        } else {
+            r
+        };
+    }
+    let language = if matches!(request.language.as_str(), "cs" | "sk" | "en") {
+        request.language
+    } else {
+        "cs".into()
+    };
+    let raw = token();
+    let result: Result<bool, sqlx::Error> = async {
+        let mut tx = pool.begin().await?;
+        let owner = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM customer_accounts WHERE email=$1 AND email_confirmation_required=$2 FOR UPDATE",
+        )
+        .bind(&email)
+        .bind(matches!(purpose, Purpose::Confirm))
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(owner) = owner else { return Ok(false) };
+        mail::store(&mut tx, owner, purpose, &raw).await?;
+        tx.commit().await?;
+        Ok(true)
+    }.await;
+    match result {
+        Ok(sent) => {
+            if sent {
+                mail::send(pool.clone(), email, language, purpose, raw);
+            }
+            accepted()
+        }
+        Err(e) => database(e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct EmailAction {
+    token: String,
+    password: String,
+}
+
+pub async fn confirm_email(
+    StateRef(state): StateRef<'_, Arc<AppState>>,
+    Json(request): Json<EmailAction>,
+    req: &WebRequest<()>,
+    remote: SocketAddr,
+) -> WebResponse {
+    complete_mail_action(state, request, req, remote, Purpose::Confirm).await
+}
+
+pub async fn reset_password(
+    StateRef(state): StateRef<'_, Arc<AppState>>,
+    Json(request): Json<EmailAction>,
+    req: &WebRequest<()>,
+    remote: SocketAddr,
+) -> WebResponse {
+    complete_mail_action(state, request, req, remote, Purpose::Reset).await
+}
+
+async fn complete_mail_action(
+    state: &AppState,
+    request: EmailAction,
+    req: &WebRequest<()>,
+    remote: SocketAddr,
+    purpose: Purpose,
+) -> WebResponse {
+    if !has_account_origin(req) {
+        return invalid_origin();
+    }
+    let Some(pool) = state.auth.pool() else {
+        return unavailable();
+    };
+    if let Some(r) = limit_response(
+        pool,
+        &format!("email-action:{}", client_bucket(req, remote)),
+        30,
+        900,
+    )
+    .await
+    {
+        return r;
+    }
+    let invalid_link = || {
+        error(
+            StatusCode::BAD_REQUEST,
+            "invalid_email_link",
+            "This email link is invalid or expired. Request a new link.",
+        )
+    };
+    if !mail::valid_token(&request.token) {
+        return invalid_link();
+    }
+    if request.password.chars().count() < 12 || request.password.len() > 1024 {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "invalid_password",
+            "Use a password of at least 12 characters.",
+        );
+    }
+    let confirm = matches!(purpose, Purpose::Confirm);
+    let token_hash = digest(&request.token);
+    let row = match sqlx::query(
+        "SELECT a.id,a.password_hash,a.name,a.domain
+         FROM customer_email_actions t JOIN customer_accounts a ON t.customer_id=a.id
+         WHERE t.token_hash=$1 AND t.purpose=$2 AND t.expires_at>now() AND a.email_confirmation_required=$3",
+    )
+    .bind(&token_hash).bind(purpose.name()).bind(confirm)
+    .fetch_optional(pool).await {
+        Ok(Some(row)) => row,
+        Ok(None) => return invalid_link(),
+        Err(e) => return database(e),
+    };
+    let owner: i64 = row.get("id");
+    let old_hash: String = row.get("password_hash");
+    let hash_to_verify = old_hash.clone();
+    let Ok(slot) = HASH_SLOTS.try_acquire() else {
+        return unavailable();
+    };
+    let new_hash = match tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        if confirm {
+            PasswordHash::new(&hash_to_verify)
+                .ok()
+                .filter(|hash| {
+                    Argon2::default()
+                        .verify_password(request.password.as_bytes(), hash)
+                        .is_ok()
+                })
+                .map(|_| hash_to_verify.clone())
+        } else {
+            Some(hash_password(&request.password))
+        }
+    })
+    .await
+    {
+        Ok(Some(hash)) => hash,
+        Ok(None) => {
+            return error(
+                StatusCode::UNAUTHORIZED,
+                "invalid_login",
+                "Email or password is incorrect.",
+            );
+        }
+        Err(_) => return unavailable(),
+    };
+    let raw = token();
+    let result: Result<bool, sqlx::Error> = async {
+        let mut tx = pool.begin().await?;
+        let current = sqlx::query_scalar::<_, String>(
+            "SELECT password_hash FROM customer_accounts WHERE id=$1 AND email_confirmation_required=$2 FOR UPDATE",
+        ).bind(owner).bind(confirm).fetch_optional(&mut *tx).await?;
+        if current.as_deref() != Some(&old_hash)
+            || !mail::consume(&mut tx, owner, purpose, &token_hash).await? {
+            return Ok(false);
+        }
+        mail::revoke(&mut tx, owner, purpose).await?;
+        if confirm {
+            provision_key(&mut tx, owner, row.get("name"), row.get("domain")).await?;
+            sqlx::query("UPDATE customer_accounts SET email_confirmation_required=FALSE WHERE id=$1")
+                .bind(owner).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO customer_sessions(token_hash,customer_id) VALUES($1,$2)")
+                .bind(digest(&raw)).bind(owner).execute(&mut *tx).await?;
+        } else {
+            sqlx::query("UPDATE customer_accounts SET password_hash=$2 WHERE id=$1")
+                .bind(owner).bind(new_hash).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM customer_sessions WHERE customer_id=$1")
+                .bind(owner).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(true)
+    }.await;
+    match result {
+        Ok(true) if confirm => session_cookie(
+            response(StatusCode::OK, serde_json::json!({"confirmed":true})),
+            &raw,
+            false,
+        ),
+        Ok(true) => session_cookie(
+            response(StatusCode::OK, serde_json::json!({"changed":true})),
+            "",
+            true,
+        ),
+        Ok(false) => invalid_link(),
+        Err(e) => database(e),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct LoginRequest {
     email: String,
@@ -512,15 +800,20 @@ pub async fn login(
             "Email or password is incorrect.",
         );
     }
-    let row = match sqlx::query("SELECT id,password_hash FROM customer_accounts WHERE email=$1")
-        .bind(email)
-        .fetch_optional(pool)
-        .await
+    let row = match sqlx::query(
+        "SELECT id,password_hash,email_confirmation_required FROM customer_accounts WHERE email=$1",
+    )
+    .bind(email)
+    .fetch_optional(pool)
+    .await
     {
         Ok(row) => row,
         Err(e) => return database(e),
     };
     let owner = row.as_ref().map(|r| r.get::<i64, _>("id"));
+    let confirmation_required = row
+        .as_ref()
+        .is_some_and(|r| r.get::<bool, _>("email_confirmation_required"));
     let hash = row.map(|r| r.get::<String, _>("password_hash"));
     let verified_hash = hash.clone();
     let valid = {
@@ -546,6 +839,13 @@ pub async fn login(
             "Email or password is incorrect.",
         );
     };
+    if confirmation_required {
+        return error(
+            StatusCode::FORBIDDEN,
+            "email_confirmation_required",
+            "Confirm your email before signing in.",
+        );
+    }
     let raw = token();
     let result: Result<bool, sqlx::Error> = async {
         let mut tx = pool.begin().await?;
@@ -1025,6 +1325,7 @@ pub async fn change_password(
         if !changed {
             return Ok(false);
         }
+        mail::revoke(&mut tx, owner, Purpose::Reset).await?;
         sqlx::query("DELETE FROM customer_sessions WHERE customer_id=$1")
             .bind(owner)
             .execute(&mut *tx)

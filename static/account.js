@@ -16,6 +16,11 @@
   const inspectionButton = element('load');
   const clearKey = element('disconnect');
   const billingDate = new Intl.DateTimeFormat(language, {dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC'});
+  const registerStatus = element('register-status');
+  const mailPanel = element('mail-action-panel');
+  const mailForm = element('mail-action-form');
+  const mailFeedback = element('mail-action-status');
+  let mailAction;
   let profile;
   let domainBusy = false;
   let inspectionSequence = 0;
@@ -38,8 +43,8 @@
 
   function render() {
     const signedIn = Boolean(profile);
-    element('account-entry').hidden = signedIn;
-    element('customer-dashboard').hidden = !signedIn;
+    element('account-entry').hidden = signedIn || Boolean(mailAction);
+    element('customer-dashboard').hidden = !signedIn || Boolean(mailAction);
     resetInspection();
     element('customer-key').value = profile?.api_key || '';
     element('customer-key').type = 'password';
@@ -382,18 +387,82 @@
   form('register-form', async data => {
     resetLookup();
     cancelAddressSearch();
-    await api('register', {...data, business: data.business === 'on', accept_terms: data.terms === 'on',
+    const result = await api('register', {...data, business: data.business === 'on', accept_terms: data.terms === 'on',
       terms_version: '2026-11-23-pricing', language});
+    if (result.confirmation_required) {
+      registerStatus.textContent = translate('Check your email to confirm registration and activate your Free API key.');
+      element('resend-confirmation-form').elements.email.value = data.email;
+      return;
+    }
     await load();
     openAccount();
     status.textContent = 'Your account is ready.';
-  });
+  }, registerStatus);
 
   form('login-form', async data => {
+    element('login-status').classList.add('error');
     await api('login', data);
     await load();
     openAccount();
   }, element('login-status'));
+
+  if (window.AddresswiseAccountEmailEnabled) {
+    element('mail-request-controls').hidden = false;
+    for (const [kind, message] of [
+      ['forgot-password', 'If the account can be reset, we’ll email a password reset link.'],
+      ['resend-confirmation', 'If the registration is awaiting confirmation, we’ll email a new link.'],
+    ]) {
+      const feedback = element(kind + '-status');
+      form(kind + '-form', async data => {
+        await api(kind, {...data, language});
+        feedback.textContent = translate(message);
+      }, feedback);
+    }
+  }
+
+  function syncMailAction() {
+    const match = location.hash.match(/^#(confirm-email|reset-password)=([A-Za-z0-9_-]{43})$/);
+    if (!match && !mailAction) return;
+    mailAction = match && {name: match[1], token: match[2]};
+    mailPanel.hidden = !mailAction;
+    element('account-entry').hidden = Boolean(profile || mailAction);
+    element('customer-dashboard').hidden = !profile || Boolean(mailAction);
+    mailForm.reset();
+    mailFeedback.textContent = '';
+    if (!mailAction) return;
+    const reset = mailAction.name === 'reset-password';
+    element('mail-action-title').textContent = translate(reset ? 'Set a new password' : 'Confirm your email');
+    element('mail-password-label').textContent = translate(reset ? 'New password' : 'Password from registration');
+    mailForm.elements.password.autocomplete = reset ? 'new-password' : 'current-password';
+    element('mail-action-submit').textContent = translate(reset ? 'Reset password' : 'Confirm registration');
+    mailPanel.scrollIntoView();
+  }
+
+  form('mail-action-form', async data => {
+    const action = mailAction;
+    if (!action) return;
+    await api(action.name, {token: action.token, password: data.password});
+    if (mailAction !== action) {
+      await load();
+      return;
+    }
+    mailAction = null;
+    mailPanel.hidden = true;
+    const reset = action.name === 'reset-password';
+    history.replaceState(null, '', location.pathname + location.search + (reset ? '#sign-in' : '#customer-dashboard'));
+    await load();
+    if (reset) {
+      element('login-status').classList.remove('error');
+      element('login-status').textContent = translate('Password reset. Sign in with your new password.');
+      element('sign-in').scrollIntoView();
+    } else {
+      openAccount();
+      status.textContent = translate('Your email is confirmed and your API key is ready.');
+    }
+  }, mailFeedback);
+  window.addEventListener('hashchange', syncMailAction);
+  syncMailAction();
+
   form('upgrade-form', async data => {
     await api('subscription', data, true);
     await load();
@@ -440,6 +509,10 @@
 
   async function initialize() {
     await load();
+    if (mailAction) {
+      mailPanel.scrollIntoView();
+      return;
+    }
     const plan = new URLSearchParams(location.search).get('plan');
     if (profile && plans.includes(plan)) {
       if (plan !== 'free') element('upgrade-form').elements.plan.value = plan;

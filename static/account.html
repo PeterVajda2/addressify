@@ -20,12 +20,18 @@
 .domain-entry label{flex:1;min-width:0;margin:0}
 .domain-entry button{flex-shrink:0;min-height:44px}
 #domain-status{margin:10px 0 0}#domain-status:empty,#customer-key-status:empty{margin:0}
-#login-status{margin:8px 0 0}#login-status:empty{margin:0}
+#login-status,#register-status{margin:8px 0 0}
+#login-status:empty,#register-status:empty,#mail-request-controls p:empty,#mail-action-status:empty{margin:0}
+#mail-request-controls{margin-top:20px}
+#mail-request-controls details{margin:10px 0}
+#mail-request-controls summary{cursor:pointer;color:var(--blue)}
+#mail-request-controls form{margin-top:10px}
+#mail-action-panel{max-width:540px;margin-bottom:30px}
 @media(max-width:420px){.domain-entry{display:block}.domain-entry button{margin-top:8px}}
 </style></head><a class="skip-link" href="#main">Skip to content</a><div class="wrap"><nav class="main-nav" aria-label="Main navigation"><a class="brand" href="/"><span aria-hidden="true">⌖</span>addresswise</a><div class="links"><a href="/#products">Products</a><a href="/#pricing">Pricing</a><a href="/docs">Developers</a><a class="nav-cta" href="/account" aria-current="page">API access &amp; usage</a></div></nav><main id="main"><section class="hero account-hero"><p class="eyebrow">API access &amp; usage</p><h1>One key. Both products.</h1><p class="lede">Start with 1,000 free credits per month. Choose a larger package when you need it. No automatic upgrades or overage fees.</p></section><div class="account-grid" id="account-entry">
 <section class="account-panel" id="request-access">
 <h2>Request an API key.</h2>
-<p>Create a business account to get your Free API key immediately. You can select a paid upgrade during registration.</p>
+<p>Create a business account to get a Free API key. You can select a paid upgrade during registration.</p>
 <form id="register-form" method="post">
 <label>Company country<select name="company_country"><option value="CZ">Czechia</option><option value="SK">Slovakia</option></select></label>
 <label>Company number (IČO)<input name="ico" inputmode="numeric" maxlength="8" pattern="[0-9]{8}" autocomplete="off" aria-describedby="registration-lookup-status"></label>
@@ -46,6 +52,7 @@
 <option value="starter">Starter · 100,000 credits · €5/month</option>
 <option value="growth">Growth · 1,000,000 credits · €10/month</option>
 <option value="unlimited">Unlimited · €25/month</option></select></label>
+<p id="register-status" role="status"></p>
 <label class="estimate-check"><input name="business" type="checkbox" required> I am registering for business use.</label>
 <label class="estimate-check"><input name="terms" type="checkbox" required> I accept the <a href="/terms" target="_blank" rel="noopener">Terms of service</a>.</label>
 <button class="button" type="submit" disabled>Create account</button>
@@ -56,8 +63,28 @@
 <label>Password<input name="password" type="password" required autocomplete="current-password" aria-describedby="login-status"></label>
 <p id="login-status" class="error" role="alert"></p>
 <div class="actions"><button class="button" type="submit" disabled>Sign in</button></div>
-</form><p class="business-note">For help accessing your account, contact <a href="mailto:peter@addresswise.eu">peter@addresswise.eu</a>.</p></section>
+</form>
+<div id="mail-request-controls" hidden>
+<details><summary>Forgot your password?</summary><form id="forgot-password-form" method="post">
+<label>Contact email<input name="email" type="email" required maxlength="254" autocomplete="email"></label>
+<p id="forgot-password-status" role="status"></p>
+<button class="button secondary" type="submit" disabled>Send reset link</button>
+</form></details>
+<details><summary>Resend confirmation email</summary><form id="resend-confirmation-form" method="post">
+<label>Contact email<input name="email" type="email" required maxlength="254" autocomplete="email"></label>
+<p id="resend-confirmation-status" role="status"></p>
+<button class="button secondary" type="submit" disabled>Send confirmation link</button>
+</form></details>
+</div><p class="business-note">For help accessing your account, contact <a href="mailto:peter@addresswise.eu">peter@addresswise.eu</a>.</p></section>
 </div>
+<section class="account-panel" id="mail-action-panel" hidden aria-labelledby="mail-action-title">
+<h2 id="mail-action-title"></h2>
+<form id="mail-action-form" method="post">
+<label><span id="mail-password-label">Password</span><input name="password" type="password" required minlength="12" maxlength="512" autocomplete="current-password"></label>
+<p id="mail-action-status" role="status"></p>
+<div class="actions"><button id="mail-action-submit" class="button" type="submit" disabled>Continue</button>
+<a href="/account#sign-in">Back to sign in</a></div>
+</form></section>
 <noscript><p>Enable JavaScript to register or sign in.</p></noscript>
 <p id="account-status" role="status" aria-live="polite"></p>
 <section id="customer-dashboard" hidden>
@@ -109,6 +136,7 @@
 const byId=id=>document.getElementById(id);const operationNames={autocomplete:'Address autocomplete',validation:'Address validation',company:'Company details'};
 function renderCredits(data){byId('credit-usage').hidden=false;byId('credit-plan').textContent=data.plan.name+' · '+(data.plan.credit_limit===null?'No monthly credit limit':data.plan.credit_limit.toLocaleString()+' credits/month')+' · '+(data.plan.monthly_price_eur===null?'Agreed custom pricing':'€'+data.plan.monthly_price_eur+'/month');byId('credits-used').textContent=data.used_credits.toLocaleString();byId('credits-remaining').textContent=data.is_demo?'Demo key':(data.remaining_credits===null?'Unlimited':data.remaining_credits.toLocaleString());byId('credit-pending').textContent=data.reserved_credits?data.reserved_credits.toLocaleString()+' credits are reserved by requests currently in progress.':'';byId('credit-limit-note').hidden=data.plan.credit_limit===null;byId('credit-limit-note').textContent=data.is_demo?'This public demo key is separate from customer allowances.':'Hard limit: requests that would exceed this package are blocked with HTTP 429 / credit_limit_exceeded. Reset: '+data.resets_at;byId('credit-history-note').textContent='Credit metering started '+data.metering_started_at+'. Earlier combined request counts are not retroactively converted or charged.';const ops=new Map(data.operations.map(row=>[row.operation,row]));byId('credit-rows').replaceChildren(...Object.entries(operationNames).map(([id,name])=>{const row=ops.get(id)||{requests:0,credits:0};const tr=document.createElement('tr');for(const value of [name,row.requests.toLocaleString(),row.credits.toLocaleString()]){const td=document.createElement('td');td.textContent=value;tr.append(td)}return tr}));}
 /* Registration and signed-in account controls are in account.js. */
+window.AddresswiseAccountEmailEnabled = __ACCOUNT_EMAIL_ENABLED__;
 window.AddresswiseRegistrationDemo = {key: __DEMO_API_KEY__, countries: __DEMO_COUNTRIES__};
 const selectedPlan=new URLSearchParams(location.search).get('plan');if(['free','starter','growth','unlimited'].includes(selectedPlan))byId('request-plan').value=selectedPlan;
 </script><script>__ACCOUNT_SCRIPT__</script></body></html>

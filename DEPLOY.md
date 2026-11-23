@@ -332,7 +332,7 @@ contract records. The access enquiry is not a binding paid order.
 
 ## Customer accounts
 
-Apply migrations 0006 through 0009 before starting this binary. `deploy/rollout-accounts.sh` applies
+Apply migrations 0006 through 0010 before starting this binary. `deploy/rollout-accounts.sh` applies
 the additive migrations and exercises a temporary customer account before and
 after cutover. It preserves existing credentials and their usage history.
 Registration provisions a Free key and records the selected plan and accepted
@@ -342,3 +342,29 @@ until the scheduled UTC month boundary and then returns to Free on the first
 account/billing operation. GoPay is disabled pending integration. Set a paid
 plan in the admin only after confirming payment separately. Legacy keys remain
 available through the existing usage form. An email match never links a key.
+
+### Account email
+
+Addresswise sends registration and password-reset messages via authenticated
+implicit TLS on `smtp.seznam.cz:465`, using `peter@addresswise.eu` as both the
+sender and the SMTP login. With two-step verification, use Seznam’s separate
+password for mail protocols.
+
+Set `ADDRESSWISE_SMTP_PASSWORD_FILE=/etc/addresswise.smtp-password` in the
+service’s `/etc/addresswise.env`. Put the mail-protocol password on the first
+and only line of that file using a private editor. Give the file mode `0600`
+and ownership to the service user `peter`. Keep the password out of the service
+environment file, command history and version control. Restart the service
+after adding or replacing it. Registration retains immediate provisioning
+until the file path is configured. A configured file that cannot be loaded
+makes new registration temporarily unavailable.
+
+With email enabled, new registrations require confirmation before sign-in and
+Free key issuance. Previously created accounts can sign in as usual. Confirmation
+links expire in 24 hours and password-reset links in 30 minutes. Links are consumed
+only after the account form is submitted, and resets revoke existing sessions.
+Failed deliveries are retried in-process. The confirmation link can also be
+requested again on the sign-in page.
+
+After activation, register using a mailbox you control, confirm the link, then
+request a password reset and verify both delivery and the new sign-in.

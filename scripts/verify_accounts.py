@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise a temporary customer account and remove its own test records."""
 import argparse
+from hashlib import sha256
 import json
 import os
 import secrets
@@ -40,11 +41,28 @@ def verify(base):
         )
         check(result.returncode == 0, 'Temporary account database check failed')
 
+    def register_for_test(payload):
+        status, data, headers = call('/account/api/register', payload)
+        check(status == 201, 'Registration failed')
+        if data.get('confirmation_required'):
+            check(headers.get('Set-Cookie') is None, 'Unconfirmed registration created a session')
+            token = secrets.token_urlsafe(32)
+            digest = sha256(token.encode()).hexdigest()
+            verify_email = payload['email']  # Generated under the reserved .invalid domain.
+            sql(f"""INSERT INTO customer_email_actions(token_hash,customer_id,purpose,expires_at)
+                    SELECT '{digest}',id,'confirm',now()+interval '1 hour'
+                    FROM customer_accounts WHERE email='{verify_email}';""")
+            status, _, headers = call('/account/api/confirm-email', {'token': token, 'password': password})
+            check(status == 200, 'Test registration could not be confirmed')
+        return headers
+
     password = secrets.token_urlsafe(24)
     email = 'verification-' + secrets.token_hex(8) + '@example.invalid'
     admin = {'X-Admin-Key': os.environ['ADMIN_API_KEY']}
     key_id = None
     owner = None
+    pending_email = 'pending-' + email
+    pending_key = None
     try:
         company = {'company_country': 'CZ', 'ico': '00270824', 'vat_id': 'CZ00270824',
                    'street': 'Custom business address', 'city': 'Praha', 'postal_code': '110 00'}
@@ -55,8 +73,7 @@ def verify(base):
         check(call('/account/api/me')[0] == 401, 'Account must require a session')
         check(call('/account/api/register', payload, origin='https://example.invalid')[0] == 403,
               'Registration must reject cross-site requests')
-        status, _, headers = call('/account/api/register', payload)
-        check(status == 201, 'Registration failed')
+        headers = register_for_test(payload)
         cookie = headers['Set-Cookie'].split(';')[0]
         check(all(flag in headers['Set-Cookie'] for flag in ('Secure', 'HttpOnly', 'SameSite=Lax')),
               'Session cookie protections missing')
@@ -172,11 +189,47 @@ def verify(base):
         check(status == 200, 'Login failed')
         check(call('/account/api/me', cookie=headers['Set-Cookie'].split(';')[0])[1]['api_key'] == key,
               'Login did not restore the same owned key')
+        reset_token = secrets.token_urlsafe(32)
+        reset_hash = sha256(reset_token.encode()).hexdigest()
+        reset_payload = {'token': reset_token, 'password': secrets.token_urlsafe(24)}
+        sql(f"""INSERT INTO customer_email_actions(token_hash,customer_id,purpose,expires_at)
+                VALUES ('{reset_hash}',{owner},'reset',now()+interval '1 hour');""")
+        check(call('/account/api/reset-password', reset_payload)[0] == 200, 'Password reset failed')
+        check(call('/account/api/reset-password', reset_payload)[0] == 400, 'Reset link was reusable')
+        check(call('/account/api/me', cookie=headers['Set-Cookie'].split(';')[0])[0] == 401,
+              'Password reset did not revoke a previous session')
+        check(call('/account/api/login', {'email': email, 'password': password})[0] == 401,
+              'Old password worked after reset')
+        check(call('/account/api/login', {'email': email, 'password': reset_payload['password']})[0] == 200,
+              'New password did not work after reset')
+
+        confirmation_token = secrets.token_urlsafe(32)
+        confirmation_hash = sha256(confirmation_token.encode()).hexdigest()
+        sql(f"""WITH pending AS (
+                    INSERT INTO customer_accounts(email,name,password_hash,domain,requested_plan,
+                        terms_version,terms_language,email_confirmation_required)
+                    SELECT '{pending_email}',name,password_hash,domain,'starter',terms_version,terms_language,TRUE
+                    FROM customer_accounts WHERE id={owner} RETURNING id
+                )
+                INSERT INTO customer_email_actions(token_hash,customer_id,purpose,expires_at)
+                SELECT '{confirmation_hash}',id,'confirm',now()+interval '1 hour' FROM pending;""")
+        confirm_payload = {**reset_payload, 'token': confirmation_token}
+        check(call('/account/api/login', {'email': pending_email, 'password': reset_payload['password']})[0] == 403,
+              'Unconfirmed account could sign in')
+        check(call('/account/api/confirm-email', {**confirm_payload, 'password': 'wrong-passphrase'})[0] == 401,
+              'Confirmation accepted the wrong registration password')
+        status, _, headers = call('/account/api/confirm-email', confirm_payload)
+        check(status == 200, 'Registration confirmation failed')
+        confirmed = call('/account/api/me', cookie=headers['Set-Cookie'].split(';')[0])[1]
+        pending_key = confirmed['api_key_id']
+        check(isinstance(pending_key, int) and confirmed['subscription']['active_plan'] == 'free'
+              and confirmed['subscription']['selected_plan'] == 'starter',
+              'Confirmation did not provision the Free key or preserve the selected plan')
+        check(call('/account/api/confirm-email', confirm_payload)[0] == 400, 'Confirmation link was reusable')
         # A second customer cannot access the first customer's key or change their plan.
         second = {field: value for field, value in payload.items() if field not in company}
         second.update(email='second-' + email, plan='free')
-        status, _, headers = call('/account/api/register', second)
-        check(status == 201, 'Free registration failed')
+        headers = register_for_test(second)
         other_cookie = headers['Set-Cookie'].split(';')[0]
         other_profile = call('/account/api/me', cookie=other_cookie)[1]
         other_id, other_key = other_profile['customer']['id'], other_profile['api_key_id']
@@ -196,12 +249,17 @@ def verify(base):
                   'Temporary Free key cleanup failed')
             cleanup_history([other_key])
     finally:
+        sql(f"DELETE FROM customer_accounts WHERE email='{pending_email}';")
+        if pending_key is not None:
+            check(call('/admin/api/keys/delete', {'id': pending_key}, headers=admin)[0] == 200,
+                  'Temporary confirmed key cleanup failed')
+            cleanup_history([pending_key])
         if owner is not None and key_id is not None:
             sql(f'DELETE FROM customer_accounts WHERE id={owner} AND api_key_id={key_id};')
             check(call('/admin/api/keys/delete', {'id': key_id}, headers=admin)[0] == 200,
                   'Temporary key cleanup failed')
             cleanup_history([key_id])
-    print('PASS: Free provisioning, selected paid plan, domain add/remove and subdomain scope, session isolation, GoPay placeholder, and cancellation')
+    print('PASS: key provisioning, single-use confirmation and password resets, session isolation, domains, subscription and cancellation')
 
 
 if __name__ == '__main__':

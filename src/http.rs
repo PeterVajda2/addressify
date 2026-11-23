@@ -192,6 +192,22 @@ pub fn serve_with_state(addr: String, state: Arc<AppState>) -> AppResult<()> {
             "/account/api/logout",
             post(handler_service(crate::accounts::logout)),
         )
+        .at(
+            "/account/api/resend-confirmation",
+            post(handler_service(crate::accounts::resend_confirmation)),
+        )
+        .at(
+            "/account/api/forgot-password",
+            post(handler_service(crate::accounts::forgot_password)),
+        )
+        .at(
+            "/account/api/confirm-email",
+            post(handler_service(crate::accounts::confirm_email)),
+        )
+        .at(
+            "/account/api/reset-password",
+            post(handler_service(crate::accounts::reset_password)),
+        )
         .at("/account/api/me", get(handler_service(crate::accounts::me)))
         .at(
             "/account/api/key-usage",

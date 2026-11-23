@@ -29,3 +29,4 @@ argon2 = "0.5.3"
 sha2 = "0.10.9"
 subtle = "2.6.1"
 psl = "2"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
