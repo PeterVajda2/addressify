@@ -6,7 +6,21 @@
 @media(max-width:740px){.hero h1{font-size:clamp(32px,8.7vw,40px)}.hero-grid .record-preview{display:none}.demo-row{display:grid;grid-template-columns:minmax(0,1fr) auto}.demo-row select{grid-column:1/-1;width:100%}.demo-row input{width:100%;grid-column:1}.demo-submit{grid-column:2}.price-card>p:not(.price):not(.eyebrow){min-height:0}}
 #registration-address-results{margin:0}
 #registration-lookup-status:empty,#registration-address-status:empty{margin:0}
-#customer-address{white-space:pre-line;overflow-wrap:anywhere}
+#customer-identity{color:var(--muted);font-size:14px;overflow-wrap:anywhere}
+#customer-dashboard .account-title{justify-content:space-between;margin-bottom:4px}
+#customer-dashboard .account-title h2{margin:0}
+#customer-dashboard .subscription-plan{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:0 0 14px;border-bottom:1px solid var(--line)}
+#customer-dashboard .subscription-plan strong{color:var(--ink);font-size:18px}
+.domain-controls{border-top:1px solid var(--line);margin-top:22px;padding-top:20px}
+.domain-controls h4{margin:0 0 4px}
+.domain-list{list-style:none;margin:0 0 14px;padding:0}
+.domain-list li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:14px;overflow-wrap:anywhere}
+.domain-list button{min-height:36px;padding:5px 10px;flex-shrink:0}
+.domain-entry{display:flex;align-items:end;gap:8px}
+.domain-entry label{flex:1;min-width:0;margin:0}
+.domain-entry button{flex-shrink:0;min-height:44px}
+#domain-status{margin:10px 0 0}#domain-status:empty,#customer-key-status:empty{margin:0}
+@media(max-width:420px){.domain-entry{display:block}.domain-entry button{margin-top:8px}}
 </style><style>.language-control{display:flex;align-items:center;gap:8px;margin:0;font-size:13px;font-weight:600;white-space:nowrap}.language-control>span{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0)}.language-control select{width:73px;min-height:40px;padding:8px;border:1px solid #9dabbf;border-radius:7px;background-color:white;color:#162239;font:600 13px system-ui}.locale-toolbar{display:flex;justify-content:flex-end;margin-bottom:16px}.main-nav>.links{flex:1;justify-content:flex-end}.business-note{font-size:14px;color:#536177;margin-top:18px}footer .terms-link{white-space:nowrap}@media(max-width:740px){.main-nav>.brand{order:1}.main-nav>.language-control{order:2;margin-left:auto}.main-nav>.links{order:3;flex:1 0 100%;gap:12px;justify-content:space-between}.custom-price{white-space:normal;font-size:26px;line-height:1.15}}@media print{.docs-layout{display:block}.wrap{width:100%}nav,.language-control,.docs-sidebar,.skip-link{display:none!important}.section{break-inside:avoid}body{font-size:11pt}}</style><script>window.AddresswiseMessages={};</script><script>__ACCOUNT_I18N_SCRIPT__</script></head><body><a class="skip-link" href="#main">Skip to content</a><div class="wrap"><nav class="main-nav" aria-label="Main navigation"><a class="brand" href="/?lang=en"><span aria-hidden="true">⌖</span>addresswise</a><div class="links"><a href="/?lang=en#products">Products</a><a href="/?lang=en#pricing">Pricing</a><a href="/docs?lang=en">Developers</a><a class="nav-cta" href="/account?lang=en" aria-current="page">API access &amp; usage</a></div><label class="language-control" for="language-selector"><span>Language</span><select id="language-selector" aria-label="Language"><option value="cs">CZ</option><option value="sk">SK</option><option value="en" selected>EN</option></select></label></nav><main id="main"><section class="hero account-hero"><p class="eyebrow">API access &amp; usage</p><h1>One key. Both products.</h1><p class="lede">Start with 1,000 free credits per month. Choose a larger package when you need it. No automatic upgrades or overage fees.</p></section><div class="account-grid" id="account-entry">
 <section class="account-panel" id="request-access">
 <h2>Request an API key.</h2>
@@ -45,26 +59,37 @@
 <noscript><p>Enable JavaScript to register or sign in.</p></noscript>
 <p id="account-status" role="status" aria-live="polite"></p>
 <section id="customer-dashboard" hidden>
-<div class="actions"><h2>My account</h2><button class="button secondary" id="sign-out" type="button">Sign out</button></div>
+<div class="actions account-title"><h2>My account</h2><button class="button secondary" id="sign-out" type="button">Sign out</button></div>
 <p id="customer-identity" data-source></p>
-<p id="customer-address" data-source hidden></p>
 <div class="account-grid">
 <section class="account-panel"><h3>Subscription</h3>
-<dl><dt>Active plan</dt><dd id="active-plan" data-source></dd><dt>Selected plan</dt><dd id="selected-plan" data-source></dd><dt>Status</dt><dd id="subscription-status"></dd></dl>
+<p class="subscription-plan"><span>Active plan</span><strong id="active-plan" data-source></strong></p>
 <p id="cancel-effective" hidden>Free starts at <time id="cancel-at"></time> (UTC).</p>
 <form id="upgrade-form" method="post"><label>Choose a paid plan<select name="plan"><option value="starter">Starter · 100,000 credits · €9/month</option>
 <option value="growth">Growth · 1,000,000 credits · €19/month</option>
 <option value="custom">Custom · over 1 million · send an enquiry</option></select></label>
 <div class="actions"><button class="button secondary" type="submit">Select plan</button></div></form>
-<div id="payment-panel" hidden><p>GoPay checkout is coming soon. Payment is required to activate a paid upgrade.</p>
+<div id="payment-panel" hidden><p><span>Pending upgrade</span> · <strong id="selected-plan" data-source></strong></p>
+<p>GoPay checkout is coming soon. Payment is required to activate a paid upgrade.</p>
 <button class="button secondary" id="gopay-payment" type="button" disabled>Pay with GoPay</button></div>
 <div class="actions"><button class="button secondary" id="cancel-subscription" type="button" hidden>Cancel subscription</button></div>
 </section>
-<section class="account-panel"><h3>API key</h3><p id="customer-domain" data-source></p><p>The domain and its subdomains are allowed for autocomplete.</p>
+<section class="account-panel"><h3>API key</h3>
 <div id="key-controls" hidden>
 <label>Your API key<input id="customer-key" type="password" readonly autocomplete="off" spellcheck="false"></label>
 <div class="actions"><button class="button secondary" id="show-key" type="button">Show key</button><button class="button secondary" id="copy-key" type="button">Copy key</button></div>
-</div><p id="customer-key-status"></p></section>
+</div><p id="customer-key-status"></p>
+<div class="domain-controls" id="domain-controls" hidden>
+<h4>Allowed domains</h4>
+<p>Each domain also allows its subdomains for address autocomplete.</p>
+<ul class="domain-list" id="domain-list"></ul>
+<p id="no-domains" hidden>Autocomplete is blocked until you add a domain.</p>
+<form id="domain-form" method="post" class="domain-entry">
+<label>Domain<input name="domain" required maxlength="253" placeholder="example.com" autocomplete="off" spellcheck="false"></label>
+<button class="button secondary" type="submit">Add domain</button>
+</form>
+<p id="domain-status" role="status"></p>
+</div></section>
 </div>
 <details class="account-panel"><summary>Change password</summary><form id="password-form" method="post">
 <label>Current password<input name="current_password" type="password" required autocomplete="current-password"></label>

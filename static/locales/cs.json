@@ -638,5 +638,13 @@
   "Company name": "Název firmy",
   "Companywise did the typing. You can edit any field.": "Companywise údaje vyplnil za vás. Můžete je upravit.",
   "Companywise found the company.": "Companywise našel firmu.",
-  "Check the company number, VAT number and address fields.": "Zkontrolujte IČO, DIČ a adresu."
+  "Check the company number, VAT number and address fields.": "Zkontrolujte IČO, DIČ a adresu.",
+  "Pending upgrade": "Čeká na aktivaci",
+  "Each domain also allows its subdomains for address autocomplete.": "Našeptávání adres funguje i na subdoménách každé povolené domény.",
+  "Autocomplete is blocked until you add a domain.": "Našeptávání adres bude dostupné po přidání domény.",
+  "Domain": "Doména",
+  "Add domain": "Přidat doménu",
+  "Remove": "Odebrat",
+  "Domain added.": "Doména přidána.",
+  "Domain removed.": "Doména odebrána."
 }

@@ -194,6 +194,10 @@ pub fn serve_with_state(addr: String, state: Arc<AppState>) -> AppResult<()> {
         )
         .at("/account/api/me", get(handler_service(crate::accounts::me)))
         .at(
+            "/account/api/domains",
+            post(handler_service(crate::accounts::change_domain)),
+        )
+        .at(
             "/account/api/subscription",
             post(handler_service(crate::accounts::select_plan)),
         )

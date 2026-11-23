@@ -107,6 +107,31 @@ def verify(base):
         profile = call('/account/api/me', cookie=cookie)[1]
         check(profile['subscription']['active_plan'] == 'free' and profile['credits']['used_credits'] == 5,
               'Cancellation did not restore Free while retaining usage')
+        domains_endpoint = '/account/api/domains'
+        addition = {'action': 'add', 'domain': 'Second-Example.COM.'}
+        check(profile['domains'] == ['mydomain.com'], 'The original allowlist was not loaded')
+        check(call(domains_endpoint, addition)[0] == 401, 'Anonymous domain change accepted')
+        check(call(domains_endpoint, addition, cookie=cookie)[0] == 403, 'Domain change must require CSRF')
+        check(call(domains_endpoint, addition, cookie=cookie, csrf=csrf, origin=other)[0] == 403,
+              'Cross-site domain change accepted')
+        invalid_domain = {**addition, 'domain': 'https://second-example.com/path'}
+        check(call(domains_endpoint, invalid_domain, cookie=cookie, csrf=csrf)[0] == 400,
+              'A URL was accepted as a hostname')
+        for _ in range(2):
+            status, body, _ = call(domains_endpoint, addition, cookie=cookie, csrf=csrf)
+            check(status == 200 and body['domains'] == ['mydomain.com', 'second-example.com'],
+                  'Adding a second domain or retrying the request failed')
+        check(call(search, origin='https://sub.second-example.com')[0] == 200,
+              'A newly allowed subdomain was rejected')
+        for domain, remaining in [('mydomain.com', ['second-example.com']), ('second-example.com', [])]:
+            status, body, _ = call(domains_endpoint, {'action': 'remove', 'domain': domain},
+                                   cookie=cookie, csrf=csrf)
+            check(status == 200 and body['domains'] == remaining, 'Removing an allowed domain failed')
+            check(call(search, origin='https://sub.' + domain)[0] == 403,
+                  'A removed domain still authorizes autocomplete')
+        check(call(validation, address, origin=other)[0] == 200,
+              'An empty domain list changed direct validation')
+        check(call('/account/api/me', cookie=cookie)[1]['domains'] == [], 'An empty allowlist did not persist')
         check(call('/account/api/logout', {}, cookie=cookie, csrf=csrf)[0] == 200, 'Logout failed')
         check(call('/account/api/me', cookie=cookie)[0] == 401, 'Logged-out session still works')
         check(call('/account/api/login', {'email': email, 'password': 'incorrect'})[0] == 401,
@@ -129,6 +154,8 @@ def verify(base):
                   'Registration without an address should still work')
             check(other_profile['api_key'] != key and other_profile['credits']['used_credits'] == 0,
                   'Customer isolation failed')
+            check(other_profile['domains'] == ['mydomain.com'],
+                  'Changes to one key modified the other key’s allowlist')
             check(call('/account/api/subscription', {'plan': 'growth'}, cookie=other_cookie, csrf=csrf)[0] == 403,
                   'A different account CSRF token was accepted')
         finally:
@@ -142,7 +169,7 @@ def verify(base):
             check(call('/admin/api/keys/delete', {'id': key_id}, headers=admin)[0] == 200,
                   'Temporary key cleanup failed')
             cleanup_history([key_id])
-    print('PASS: Free provisioning, selected paid plan, domain and subdomain scope, session isolation, GoPay placeholder, and cancellation')
+    print('PASS: Free provisioning, selected paid plan, domain add/remove and subdomain scope, session isolation, GoPay placeholder, and cancellation')
 
 
 if __name__ == '__main__':

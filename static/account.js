@@ -6,7 +6,12 @@
   const language = document.documentElement.lang;
   const plans = ['free', 'starter', 'growth', 'custom'];
   const names = {free: 'Free', starter: 'Starter', growth: 'Growth', custom: 'Custom'};
+  const domainForm = element('domain-form');
+  const domainList = element('domain-list');
+  const domainStatus = element('domain-status');
+  const billingDate = new Intl.DateTimeFormat(language, {dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC'});
   let profile;
+  let domainBusy = false;
 
   async function api(path, body, authenticated = false) {
     const options = {cache: 'no-store'};
@@ -34,22 +39,18 @@
     element('customer-key').value = profile?.api_key || '';
     element('customer-key').type = 'password';
     element('show-key').textContent = translate('Show key');
+    renderDomains();
     if (!profile) return;
     const {customer, subscription, credits} = profile;
     const active = subscription.active_plan;
     const selected = subscription.selected_plan;
     const pending = selected !== 'free' && selected !== active;
     const cancelling = Boolean(subscription.cancel_at);
-    element('customer-identity').textContent = customer.name + ' · ' + customer.email;
-    element('customer-address').textContent = customer.business_address || '';
-    element('customer-address').hidden = !customer.business_address;
-    element('customer-domain').textContent = customer.domain;
+    element('customer-identity').textContent = customer.email;
     element('active-plan').textContent = translate(names[active]);
     element('selected-plan').textContent = translate(names[selected]);
-    element('subscription-status').textContent = cancelling ? 'Cancellation scheduled' :
-      pending ? 'Awaiting payment' : active === 'free' ? 'Free plan active' : 'Paid plan active';
     element('cancel-effective').hidden = !cancelling;
-    element('cancel-at').textContent = subscription.cancel_at || '';
+    element('cancel-at').textContent = cancelling ? billingDate.format(new Date(subscription.cancel_at)) : '';
     element('upgrade-form').elements.plan.value = selected === 'free' ? 'starter' : selected;
     element('upgrade-form').hidden = cancelling;
     element('payment-panel').hidden = !pending || cancelling;
@@ -60,6 +61,60 @@
       !profile.key_active ? 'API key disabled. Contact support.' : '';
     if (credits) renderCredits(credits);
   }
+
+  function renderDomains() {
+    element('domain-controls').hidden = !profile?.api_key;
+    const domains = profile?.domains || [];
+    element('no-domains').hidden = domains.length !== 0;
+    domainList.replaceChildren(...domains.map(domain => {
+      const row = document.createElement('li');
+      const hostname = document.createElement('span');
+      hostname.textContent = domain;
+      hostname.setAttribute('data-source', '');
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'button secondary';
+      remove.textContent = translate('Remove');
+      remove.setAttribute('aria-label', translate('Remove') + ' ' + domain);
+      remove.addEventListener('click', () => changeDomain('remove', domain));
+      row.append(hostname, remove);
+      return row;
+    }));
+    setDomainControls();
+  }
+
+  function setDomainControls() {
+    for (const control of element('domain-controls').querySelectorAll('input, button')) {
+      control.disabled = domainBusy;
+    }
+  }
+
+  async function changeDomain(action, domain) {
+    const key = profile?.api_key;
+    if (!key || domainBusy) return;
+    domainBusy = true;
+    setDomainControls();
+    domainStatus.textContent = '';
+    try {
+      const result = await api('domains', {action, domain}, true);
+      if (profile?.api_key !== key) return;
+      profile.domains = result.domains;
+      renderDomains();
+      if (action === 'add') domainForm.reset();
+      domainStatus.textContent = translate(action === 'add' ? 'Domain added.' : 'Domain removed.');
+    } catch (error) {
+      if (profile?.api_key === key) domainStatus.textContent = translate(error.message);
+    } finally {
+      domainBusy = false;
+      setDomainControls();
+      if (profile?.api_key === key) domainForm.elements.domain.focus();
+    }
+  }
+
+  domainForm.addEventListener('submit', event => {
+    event.preventDefault();
+    changeDomain('add', domainForm.elements.domain.value);
+  });
 
   async function load() {
     profile = await api('me');
@@ -294,6 +349,8 @@
   element('sign-out').onclick = event => action(event.currentTarget, async () => {
     await api('logout', {}, true);
     profile = null;
+    domainForm.reset();
+    domainStatus.textContent = '';
     render();
     history.replaceState(null, '', location.pathname + location.search);
   });

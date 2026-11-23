@@ -25,8 +25,14 @@ pub enum AuthState {
 
 pub(crate) struct AuthService {
     pool: PgPool,
-    authorized_keys: Mutex<HashMap<(String, String), CachedAuthorization>>,
+    authorized_keys: Mutex<AuthorizationCache>,
     pending_usage: Mutex<HashMap<UsageKey, u64>>,
+}
+
+#[derive(Default)]
+struct AuthorizationCache {
+    entries: HashMap<(String, String), CachedAuthorization>,
+    revision: u64,
 }
 
 struct CachedAuthorization {
@@ -56,7 +62,7 @@ impl AuthState {
             .await?;
         let service = Arc::new(AuthService {
             pool,
-            authorized_keys: Mutex::new(HashMap::new()),
+            authorized_keys: Mutex::default(),
             pending_usage: Mutex::new(HashMap::new()),
         });
         start_usage_flusher(Arc::clone(&service));
@@ -93,15 +99,16 @@ impl AuthState {
         }
     }
 
-    /// Discard cached authorizations after an administrator changes a key or its domains.
+    /// Discard cached authorizations after a key or its domains change.
     pub fn clear_authorization_cache(&self) {
         match self {
             Self::Enabled(service) => {
-                service
+                let mut cache = service
                     .authorized_keys
                     .lock()
-                    .expect("authorization cache lock poisoned")
-                    .clear();
+                    .expect("authorization cache lock poisoned");
+                cache.entries.clear();
+                cache.revision = cache.revision.wrapping_add(1);
             }
             #[cfg(test)]
             Self::Disabled => {}
@@ -158,15 +165,20 @@ async fn cached_api_key_id(
     cache_key: &(String, String),
     require_domain: bool,
 ) -> Result<i64, ErrorResponse> {
-    if let Some(cached) = service
-        .authorized_keys
-        .lock()
-        .expect("authorization cache lock poisoned")
-        .get(cache_key)
-        .filter(|cached| cached.expires_at > Instant::now())
-    {
-        return Ok(cached.api_key_id);
-    }
+    let revision = {
+        let cache = service
+            .authorized_keys
+            .lock()
+            .expect("authorization cache lock poisoned");
+        if let Some(cached) = cache
+            .entries
+            .get(cache_key)
+            .filter(|cached| cached.expires_at > Instant::now())
+        {
+            return Ok(cached.api_key_id);
+        }
+        cache.revision
+    };
 
     let api_key_id = sqlx::query(
         "select id
@@ -212,17 +224,20 @@ async fn cached_api_key_id(
         }
     }
 
-    service
+    let mut cache = service
         .authorized_keys
         .lock()
-        .expect("authorization cache lock poisoned")
-        .insert(
+        .expect("authorization cache lock poisoned");
+    // A domain change can invalidate an authorization while its database read is in flight.
+    if cache.revision == revision {
+        cache.entries.insert(
             cache_key.clone(),
             CachedAuthorization {
                 api_key_id,
                 expires_at: Instant::now() + AUTH_CACHE_TTL,
             },
         );
+    }
     Ok(api_key_id)
 }
 
@@ -405,7 +420,7 @@ mod tests {
         pool.close().await;
         let service = AuthService {
             pool,
-            authorized_keys: Mutex::new(HashMap::new()),
+            authorized_keys: Mutex::default(),
             pending_usage: Mutex::new(HashMap::from([
                 (
                     UsageKey {

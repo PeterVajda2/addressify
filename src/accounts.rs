@@ -134,7 +134,7 @@ pub fn registration_domain(value: &str) -> Option<String> {
     if value.is_empty()
         || value.len() > 253
         || value.chars().any(char::is_whitespace)
-        || value.contains(['/', ':', '*', '@', '%', '_', '?', '#'])
+        || value.contains(['/', '\\', ':', '*', '@', '%', '_', '?', '#'])
     {
         return None;
     }
@@ -645,6 +645,7 @@ async fn profile(
       a.company_country,a.ico,a.vat_id,a.street,a.city,a.postal_code,
       to_char(a.cancel_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS cancel_at,
       k.id AS key_id,k.api_key,k.is_active,k.billing_plan,
+      ARRAY(SELECT domain FROM api_key_domains WHERE api_key_id=k.id ORDER BY domain) AS domains,
       to_char((date_trunc('month',now() AT TIME ZONE 'UTC')+interval '1 month'),'YYYY-MM-DD')||'T00:00:00Z' AS period_end
       FROM customer_accounts a LEFT JOIN api_keys k ON k.id=a.api_key_id WHERE a.id=$1")
       .bind(owner).fetch_one(pool).await?;
@@ -677,8 +678,97 @@ async fn profile(
     });
     Ok(serde_json::json!({"customer":customer,
       "api_key":row.get::<Option<String>,_>("api_key"),"api_key_id":row.get::<Option<i64>,_>("key_id"),"key_active":row.get::<Option<bool>,_>("is_active").unwrap_or(false),
+      "domains":row.get::<Vec<String>,_>("domains"),
       "subscription":{"active_plan":active,"selected_plan":requested,"status":status,"cancel_at":cancel,"period_end":row.get::<String,_>("period_end"),"payment_provider":"gopay","payments_enabled":false},"credits":credits,"csrf_token":csrf,"terms_version":row.get::<String,_>("terms_version")}))
 }
+
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum DomainChange {
+    Add { domain: String },
+    Remove { domain: String },
+}
+
+pub async fn change_domain(
+    StateRef(state): StateRef<'_, Arc<AppState>>,
+    Json(request): Json<DomainChange>,
+    req: &WebRequest<()>,
+) -> WebResponse {
+    let Some(pool) = state.auth.pool() else {
+        return unavailable();
+    };
+    let (owner, _) = match identity(pool, req, true).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let request = match request {
+        DomainChange::Add { domain } => match registration_domain(&domain) {
+            Some(domain) => DomainChange::Add { domain },
+            None => {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_domain",
+                    "Enter a website hostname such as mydomain.com, without a URL, path or wildcard.",
+                );
+            }
+        },
+        request => request,
+    };
+    let result: Result<Option<Vec<String>>, sqlx::Error> = async {
+        let mut tx = pool.begin().await?;
+        let key = sqlx::query_scalar::<_, i64>(
+            "SELECT k.id FROM api_keys k JOIN customer_accounts a ON a.api_key_id=k.id
+             WHERE a.id=$1 FOR UPDATE OF k",
+        )
+        .bind(owner)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(key) = key else {
+            return Ok(None);
+        };
+        match request {
+            DomainChange::Add { domain } => {
+                sqlx::query(
+                    "INSERT INTO api_key_domains(api_key_id,domain) VALUES($1,$2)
+                     ON CONFLICT(api_key_id,domain) DO NOTHING",
+                )
+                .bind(key)
+                .bind(domain)
+                .execute(&mut *tx)
+                .await?;
+            }
+            DomainChange::Remove { domain } => {
+                sqlx::query("DELETE FROM api_key_domains WHERE api_key_id=$1 AND domain=$2")
+                    .bind(key)
+                    .bind(domain)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        let domains = sqlx::query_scalar::<_, String>(
+            "SELECT domain FROM api_key_domains WHERE api_key_id=$1 ORDER BY domain",
+        )
+        .bind(key)
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(Some(domains))
+    }
+    .await;
+    match result {
+        Ok(Some(domains)) => {
+            state.auth.clear_authorization_cache();
+            response(StatusCode::OK, serde_json::json!({"domains":domains}))
+        }
+        Ok(None) => error(
+            StatusCode::NOT_FOUND,
+            "key_unavailable",
+            "API key unavailable. Contact support.",
+        ),
+        Err(e) => database(e),
+    }
+}
+
 // Caller holds the API key lock first. All reservation/report/change paths use
 // this ordering, so cancellation cannot race a charge or reset usage mid-month.
 pub async fn apply_cancellation(
@@ -931,6 +1021,7 @@ mod tests {
             "co.uk",
             "*.mydomain.com",
             "mydomain.com/evil",
+            "mydomain.com\\evil",
             "evil@mydomain.com",
             "127.0.0.1",
             "my_domain.com",
