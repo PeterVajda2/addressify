@@ -102,7 +102,7 @@ async function validateAddress(address) {
  } catch(error) { if(current===addressSequence)byId("address-validation").textContent=controller.signal.aborted?"Validation timed out. Select the address again to retry.":"Could not validate this address. Please try again."; }
  finally { clearTimeout(timeout);if(current===addressSequence)addressResult.removeAttribute("aria-busy"); }
 }
-addressInput.addEventListener("input",()=>{resetAddress();addressForm.removeAttribute("aria-busy");status(addressStatus,addressInput.value.trim().length<3?"Type at least 3 characters.":"Finding addresses…");if(addressInput.value.trim().length>=3)addressTimer=setTimeout(findAddress,300);});
+addressInput.addEventListener("input",()=>{resetAddress();addressForm.removeAttribute("aria-busy");status(addressStatus,addressInput.value.trim().length<3?"Type at least 3 characters.":"Finding addresses…");if(addressInput.value.trim().length>=3)addressTimer=setTimeout(findAddress,150);});
 addressForm.addEventListener("submit",event=>{event.preventDefault();findAddress();});
 addressInput.addEventListener("keydown",event=>{if(event.key==="ArrowDown"&&!suggestions.hidden){event.preventDefault();suggestions.querySelector("button")?.focus();}if(event.key==="Escape"){resetAddress();addressForm.removeAttribute("aria-busy");status(addressStatus,"Type an address to search again.");}});
 addressCountry.addEventListener("change",()=>{resetAddress();addressForm.removeAttribute("aria-busy");addressInput.value="";updateAddressExample();status(addressStatus,"Type at least 3 characters.");});
