@@ -93,110 +93,91 @@
   }
 
   const registration = element('register-form');
-  const companyCountry = element('registration-company-country');
-  const ico = element('registration-ico');
-  const lookupButton = element('registration-company-lookup');
+  const {company_country: country, ico, name: companyName, vat_id: vat, street, city, postal_code: postal} = registration.elements;
   const lookupStatus = element('registration-lookup-status');
-  const companyName = registration.elements.name;
-  const businessAddress = registration.elements.business_address;
-  let lookup;
-  let lastRegistryAddress = '';
-  companyCountry.value = language === 'sk' ? 'SK' : 'CZ';
+  const addressFields = [street, city, postal];
+  const fromRegistry = new Map();
+  const results = element('registration-address-results');
+  const addressStatus = element('registration-address-status');
+  const demo = window.AddresswiseRegistrationDemo;
+  let lookupTimer, lookup, addressTimer, addressSearch;
+  country.value = language === 'sk' ? 'SK' : 'CZ';
 
   function resetLookup() {
+    clearTimeout(lookupTimer);
     lookup?.abort();
     lookup = undefined;
-    lookupButton.disabled = false;
     lookupStatus.textContent = '';
   }
 
-  function formatRegistryAddress(address) {
-    const numbers = [address.reg_number, address.building_number]
-      .filter(number => number && number !== '0');
-    const street = [address.street, numbers.join('/')].filter(Boolean).join(' ');
-    const locality = [address.postal_codes?.[0], address.municipality || address.city]
-      .filter(Boolean).join(' ');
-    return street || locality ? [street, locality, address.country].filter(Boolean).join('\n') : '';
+  function streetLine(name, ...numbers) {
+    const house = numbers.filter(number => number && number !== '0').join('/');
+    return [name, house].filter(Boolean).join(' ');
   }
 
-  async function lookupCompany() {
-    resetLookup();
-    const id = ico.value.trim();
-    if (!/^[0-9]{8}$/.test(id)) {
-      lookupStatus.textContent = translate('Enter an 8-digit IČO.');
-      ico.focus();
-      return;
-    }
+  function prefill(field, value) {
+    if (field.value || !value || value.length > field.maxLength) return false;
+    field.value = value;
+    fromRegistry.set(field, value);
+    return true;
+  }
+
+  async function lookupCompany(id) {
     const controller = new AbortController();
     lookup = controller;
     const timeout = setTimeout(() => controller.abort(), 90000);
-    const originalName = companyName.value;
-    const originalAddress = businessAddress.value;
-    lookupButton.disabled = true;
     lookupStatus.textContent = translate('Checking company…');
     try {
-      const endpoint = '/companywise/api/v1/subjects/' + companyCountry.value + '/' + id + '?minimal=true';
-      const result = await fetch(endpoint, {signal: controller.signal, cache: 'no-store'});
+      const endpoint = '/companywise/api/v1/subjects/' + country.value + '/' + id + '?minimal=true';
+      const response = await fetch(endpoint, {signal: controller.signal, cache: 'no-store'});
+      if (!response.ok && response.status !== 404) throw new Error('Company lookup failed');
+      const data = response.ok ? await response.json() : {};
       if (lookup !== controller) return;
-      const unavailable = 'Company lookup is unavailable. You can enter your details manually.';
-      if (!result.ok && result.status !== 404) throw new Error(unavailable);
-      const data = result.ok ? await result.json() : {};
-      if (lookup !== controller) return;
-      const records = Array.isArray(data.records) ? data.records : [];
-      const record = records.find(entry => entry.name?.trim() && entry.name.length <= companyName.maxLength);
+      const record = data.records?.find(entry => entry.name?.trim());
       if (!record) {
         lookupStatus.textContent = translate('No company found. You can enter your details manually.');
         return;
       }
-      const address = (record.addresses || []).map(formatRegistryAddress)
-        .find(value => value && value.length <= businessAddress.maxLength);
-      if (companyName.value === originalName) companyName.value = record.name.trim();
-      if (businessAddress.value === originalAddress) {
-        if (address || (lastRegistryAddress && originalAddress === lastRegistryAddress)) {
-          businessAddress.value = address || '';
-          lastRegistryAddress = businessAddress.value;
-        }
+      const changed = [
+        prefill(companyName, record.name.trim()),
+        prefill(vat, data.vat?.vat_id),
+      ];
+      const address = record.addresses?.[0];
+      if (address && addressFields.every(field => !field.value)) {
+        changed.push(
+          prefill(street, streetLine(address.street, address.reg_number, address.building_number)),
+          prefill(city, address.city || address.municipality),
+          prefill(postal, address.postal_codes?.[0]),
+        );
       }
-      lookupStatus.textContent = translate(address
-        ? 'Companywise just did the typing. You can still edit the name and address.'
-        : 'Companywise found the name. You can add the address yourself.');
+      lookupStatus.textContent = translate(changed.some(Boolean)
+        ? 'Companywise did the typing. You can edit any field.'
+        : 'Companywise found the company.');
     } catch {
       if (lookup === controller) {
         lookupStatus.textContent = translate('Company lookup is unavailable. You can enter your details manually.');
       }
     } finally {
       clearTimeout(timeout);
-      if (lookup === controller) {
-        lookup = undefined;
-        lookupButton.disabled = false;
-      }
+      if (lookup === controller) lookup = undefined;
     }
   }
 
-  ico.addEventListener('input', resetLookup);
-  companyCountry.addEventListener('change', resetLookup);
-  lookupButton.addEventListener('click', lookupCompany);
-  ico.addEventListener('keydown', event => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      if (!lookupButton.disabled) lookupCompany();
+  function scheduleCompanyLookup() {
+    resetLookup();
+    for (const [field, value] of fromRegistry) {
+      if (field.value === value) field.value = '';
     }
-  });
-
-  const addressHelper = element('registration-address-helper');
-  const addressCountry = element('registration-address-country');
-  const addressQuery = element('registration-address-query');
-  const addressResults = element('registration-address-results');
-  const addressStatus = element('registration-address-status');
-  const addressNote = element('registration-address-note');
-  const demo = window.AddresswiseRegistrationDemo;
-  let addressTimer, addressSearch;
+    fromRegistry.clear();
+    const id = ico.value.trim();
+    if (/^[0-9]{8}$/.test(id)) lookupTimer = setTimeout(() => lookupCompany(id), 350);
+  }
 
   function cancelAddressSearch() {
     clearTimeout(addressTimer);
     addressSearch?.abort();
     addressSearch = undefined;
-    addressResults.replaceChildren();
+    results.replaceChildren();
     addressStatus.textContent = '';
   }
 
@@ -205,40 +186,35 @@
     addressSearch = controller;
     const timeout = setTimeout(() => controller.abort(), 15000);
     const streetOnly = !/\d/.test(query);
-    const params = new URLSearchParams({q: query, country: addressCountry.value, limit: '4', api_key: demo.key});
-    addressStatus.textContent = translate('Finding addresses…');
+    const params = new URLSearchParams({q: query, country: country.value, limit: '4', api_key: demo.key});
     try {
       const response = await fetch('/search?' + params + (streetOnly ? '&street_only' : ''), {signal: controller.signal});
       if (!response.ok) throw new Error('Address search failed');
       const data = await response.json();
       if (addressSearch !== controller) return;
       for (const {address} of data.results) {
-        if (!address?.full_address || address.full_address.length > businessAddress.maxLength) continue;
+        if (!address?.full_address) continue;
         const item = document.createElement('li');
         const choice = document.createElement('button');
         choice.type = 'button';
         choice.textContent = address.full_address;
         choice.addEventListener('click', () => {
           cancelAddressSearch();
-          if (streetOnly && !address.premise && !address.subpremise) {
-            addressQuery.value = (address.thoroughfare || address.full_address) + ' ';
+          if (!address.premise && !address.subpremise) {
+            street.value = (address.thoroughfare || address.full_address) + ' ';
             addressStatus.textContent = translate('Add the house number to see complete addresses.');
-            addressQuery.focus();
-            return;
+          } else {
+            for (const field of addressFields) fromRegistry.delete(field);
+            street.value = streetLine(address.thoroughfare, address.premise, address.subpremise);
+            city.value = address.locality || address.dependent_locality || '';
+            postal.value = address.postal_code || '';
+            addressStatus.textContent = translate('Addresswise did the legwork. You can still edit the address.');
           }
-          lastRegistryAddress = '';
-          businessAddress.value = address.full_address;
-          addressQuery.value = '';
-          addressHelper.open = false;
-          addressNote.textContent = translate('Addresswise did the legwork. You can still edit the address.');
-          businessAddress.focus();
+          street.focus();
         });
         item.append(choice);
-        addressResults.append(item);
+        results.append(item);
       }
-      addressStatus.textContent = translate(addressResults.childElementCount
-        ? streetOnly ? 'Select a street, then add the house number.' : 'Select an address.'
-        : 'No addresses found. Try a street and city.');
     } catch {
       if (addressSearch === controller) {
         addressStatus.textContent = translate('Address search is unavailable. You can enter the address manually.');
@@ -248,29 +224,31 @@
     }
   }
 
-  if (demo?.key && demo.countries.length) {
-    const regionNames = new Intl.DisplayNames([language], {type: 'region'});
-    const countries = demo.countries.map(code => [code, regionNames.of(code) || code]);
-    countries.sort((a, b) => a[1].localeCompare(b[1], language));
-    for (const [code, name] of countries) addressCountry.add(new Option(name, code));
-    if (demo.countries.includes(companyCountry.value)) addressCountry.value = companyCountry.value;
-    addressHelper.hidden = false;
-    const schedule = () => {
-      cancelAddressSearch();
-      const query = addressQuery.value.trim();
-      if (query.length >= 3) addressTimer = setTimeout(() => suggestAddress(query), 350);
-      else if (query) addressStatus.textContent = translate('Type at least 3 characters.');
-    };
-    addressQuery.addEventListener('input', schedule);
-    addressCountry.addEventListener('change', schedule);
-    addressQuery.addEventListener('keydown', event => {
-      if (event.key === 'Enter') event.preventDefault();
-    });
-    addressHelper.addEventListener('toggle', () => {
-      if (!addressHelper.open) cancelAddressSearch();
-    });
-    businessAddress.addEventListener('input', () => { addressNote.textContent = ''; });
+  ico.addEventListener('input', scheduleCompanyLookup);
+  ico.addEventListener('keydown', event => {
+    if (event.key === 'Enter') event.preventDefault();
+  });
+  country.addEventListener('change', () => {
+    cancelAddressSearch();
+    scheduleCompanyLookup();
+  });
+  for (const field of [companyName, vat, ...addressFields]) {
+    field.addEventListener('input', () => fromRegistry.delete(field));
   }
+  street.addEventListener('input', () => {
+    cancelAddressSearch();
+    const query = street.value.trim();
+    if (query.length >= 3 && demo?.key && demo.countries.includes(country.value)) {
+      addressTimer = setTimeout(() => suggestAddress(query), 350);
+    }
+  });
+  street.addEventListener('keydown', event => {
+    if (event.key === 'Escape') cancelAddressSearch();
+    if (event.key === 'Enter' && results.childElementCount) {
+      event.preventDefault();
+      results.querySelector('button').click();
+    }
+  });
 
   form('register-form', async data => {
     resetLookup();

@@ -253,6 +253,12 @@ pub struct RegisterRequest {
     name: String,
     #[serde(default)]
     business_address: String,
+    company_country: Option<String>,
+    ico: Option<String>,
+    vat_id: Option<String>,
+    street: Option<String>,
+    city: Option<String>,
+    postal_code: Option<String>,
     email: String,
     password: String,
     domain: String,
@@ -266,6 +272,11 @@ pub struct RegisterRequest {
     #[serde(default)]
     website: String,
 }
+
+fn optional_text(value: &Option<String>) -> Option<&str> {
+    value.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
 pub async fn register(
     StateRef(state): StateRef<'_, Arc<AppState>>,
     Json(request): Json<RegisterRequest>,
@@ -329,7 +340,45 @@ pub async fn register(
             "Enter a business address of at most 500 characters.",
         );
     }
-    let business_address = Some(business_address).filter(|address| !address.is_empty());
+    let country = optional_text(&request.company_country);
+    let ico = optional_text(&request.ico);
+    let vat = optional_text(&request.vat_id);
+    let street = optional_text(&request.street);
+    let city = optional_text(&request.city);
+    let postal = optional_text(&request.postal_code);
+    if country.is_some_and(|code| !matches!(code, "CZ" | "SK"))
+        || ico.is_some_and(|id| id.len() != 8 || !id.bytes().all(|b| b.is_ascii_digit()))
+        || [(vat, 32), (street, 200), (city, 150), (postal, 24)]
+            .into_iter()
+            .any(|(field, limit)| {
+                field.is_some_and(|value| value.chars().count() > limit || value.contains('\0'))
+            })
+    {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "invalid_company_details",
+            "Check the company number, VAT number and address fields.",
+        );
+    }
+    let business_address = if street.is_some() || city.is_some() || postal.is_some() {
+        let locality = [postal, city]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ");
+        [
+            street,
+            Some(locality.as_str()).filter(|s| !s.is_empty()),
+            country,
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n")
+    } else {
+        business_address.to_owned()
+    };
+    let business_address = Some(business_address.as_str()).filter(|address| !address.is_empty());
     if request.terms_version != TERMS_VERSION {
         return error(
             StatusCode::CONFLICT,
@@ -353,17 +402,55 @@ pub async fn register(
     };
     let raw = token();
     let key = crate::http::generate_api_key();
-    let result:Result<(),sqlx::Error>=async {
-        let mut tx=pool.begin().await?;
-        let owner=sqlx::query_scalar::<_,i64>("INSERT INTO customer_accounts(email,name,password_hash,domain,requested_plan,terms_version,terms_language,business_address) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id")
-            .bind(email).bind(request.name.trim()).bind(hash).bind(&domain).bind(request.plan).bind(TERMS_VERSION).bind(request.language).bind(business_address).fetch_one(&mut *tx).await?;
-        let key_id=sqlx::query_scalar::<_,i64>("INSERT INTO api_keys(api_key,label,billing_plan) VALUES($1,$2,'free') RETURNING id")
-            .bind(key).bind(format!("{} · {}",request.name.trim(),domain)).fetch_one(&mut *tx).await?;
-        sqlx::query("INSERT INTO api_key_domains(api_key_id,domain) VALUES($1,$2)").bind(key_id).bind(domain).execute(&mut *tx).await?;
-        sqlx::query("UPDATE customer_accounts SET api_key_id=$2 WHERE id=$1").bind(owner).bind(key_id).execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO customer_sessions(token_hash,customer_id) VALUES($1,$2)").bind(digest(&raw)).bind(owner).execute(&mut *tx).await?;
+    let result: Result<(), sqlx::Error> = async {
+        let mut tx = pool.begin().await?;
+        let owner = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO customer_accounts(
+                email,name,password_hash,domain,requested_plan,terms_version,terms_language,
+                business_address,company_country,ico,vat_id,street,city,postal_code
+            ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id",
+        )
+        .bind(email)
+        .bind(request.name.trim())
+        .bind(hash)
+        .bind(&domain)
+        .bind(request.plan)
+        .bind(TERMS_VERSION)
+        .bind(request.language)
+        .bind(business_address)
+        .bind(country)
+        .bind(ico)
+        .bind(vat)
+        .bind(street)
+        .bind(city)
+        .bind(postal)
+        .fetch_one(&mut *tx)
+        .await?;
+        let key_id = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO api_keys(api_key,label,billing_plan) VALUES($1,$2,'free') RETURNING id",
+        )
+        .bind(key)
+        .bind(format!("{} · {}", request.name.trim(), domain))
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query("INSERT INTO api_key_domains(api_key_id,domain) VALUES($1,$2)")
+            .bind(key_id)
+            .bind(domain)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE customer_accounts SET api_key_id=$2 WHERE id=$1")
+            .bind(owner)
+            .bind(key_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("INSERT INTO customer_sessions(token_hash,customer_id) VALUES($1,$2)")
+            .bind(digest(&raw))
+            .bind(owner)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await
-    }.await;
+    }
+    .await;
     match result {
         Ok(()) => session_cookie(
             response(
@@ -555,6 +642,7 @@ async fn profile(
         None
     };
     let row=sqlx::query("SELECT a.id,a.name,a.email,a.domain,a.requested_plan,a.terms_version,a.business_address,
+      a.company_country,a.ico,a.vat_id,a.street,a.city,a.postal_code,
       to_char(a.cancel_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS cancel_at,
       k.id AS key_id,k.api_key,k.is_active,k.billing_plan,
       to_char((date_trunc('month',now() AT TIME ZONE 'UTC')+interval '1 month'),'YYYY-MM-DD')||'T00:00:00Z' AS period_end
@@ -574,11 +662,22 @@ async fn profile(
     } else {
         "free"
     };
-    Ok(
-        serde_json::json!({"customer":{"id":row.get::<i64,_>("id"),"name":row.get::<String,_>("name"),"email":row.get::<String,_>("email"),"domain":row.get::<String,_>("domain"),"business_address":row.get::<Option<String>,_>("business_address")},
+    let customer = serde_json::json!({
+        "id": row.get::<i64, _>("id"),
+        "name": row.get::<String, _>("name"),
+        "email": row.get::<String, _>("email"),
+        "domain": row.get::<String, _>("domain"),
+        "business_address": row.get::<Option<String>, _>("business_address"),
+        "company_country": row.get::<Option<String>, _>("company_country"),
+        "ico": row.get::<Option<String>, _>("ico"),
+        "vat_id": row.get::<Option<String>, _>("vat_id"),
+        "street": row.get::<Option<String>, _>("street"),
+        "city": row.get::<Option<String>, _>("city"),
+        "postal_code": row.get::<Option<String>, _>("postal_code"),
+    });
+    Ok(serde_json::json!({"customer":customer,
       "api_key":row.get::<Option<String>,_>("api_key"),"api_key_id":row.get::<Option<i64>,_>("key_id"),"key_active":row.get::<Option<bool>,_>("is_active").unwrap_or(false),
-      "subscription":{"active_plan":active,"selected_plan":requested,"status":status,"cancel_at":cancel,"period_end":row.get::<String,_>("period_end"),"payment_provider":"gopay","payments_enabled":false},"credits":credits,"csrf_token":csrf,"terms_version":row.get::<String,_>("terms_version")}),
-    )
+      "subscription":{"active_plan":active,"selected_plan":requested,"status":status,"cancel_at":cancel,"period_end":row.get::<String,_>("period_end"),"payment_provider":"gopay","payments_enabled":false},"credits":credits,"csrf_token":csrf,"terms_version":row.get::<String,_>("terms_version")}))
 }
 // Caller holds the API key lock first. All reservation/report/change paths use
 // this ordering, so cancellation cannot race a charge or reset usage mid-month.

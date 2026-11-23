@@ -46,8 +46,9 @@ def verify(base):
     key_id = None
     owner = None
     try:
-        payload = {'name': 'Account verification temporary', 'email': email,
-                   'business_address': 'Custom business address\n110 00 Praha\nČesko',
+        company = {'company_country': 'CZ', 'ico': '00270824', 'vat_id': 'CZ00270824',
+                   'street': 'Custom business address', 'city': 'Praha', 'postal_code': '110 00'}
+        payload = {'name': 'Account verification temporary', 'email': email, **company,
                    'password': password, 'domain': 'MyDomain.COM', 'plan': 'growth',
                    'business': True, 'accept_terms': True, 'terms_version': '2026-11-23-accounts',
                    'language': 'cs'}
@@ -63,8 +64,10 @@ def verify(base):
         check(status == 200 and headers['Cache-Control'] == 'no-store', 'Account profile failed')
         key_id, owner = profile['api_key_id'], profile['customer']['id']
         check(isinstance(key_id, int) and isinstance(owner, int), 'Account did not provision a key')
-        check(profile['customer']['business_address'] == payload['business_address'],
-              'The submitted business address was not saved')
+        check(all(profile['customer'][field] == value for field, value in company.items()),
+              'The submitted company and address fields were not saved separately')
+        check(profile['customer']['business_address'] == 'Custom business address\n110 00 Praha\nCZ',
+              'The formatted business address was not saved')
         csrf = profile['csrf_token']
         subscription = profile['subscription']
         check(subscription['active_plan'] == 'free' and subscription['selected_plan'] == 'growth'
@@ -113,8 +116,8 @@ def verify(base):
         check(call('/account/api/me', cookie=headers['Set-Cookie'].split(';')[0])[1]['api_key'] == key,
               'Login did not restore the same owned key')
         # A second customer cannot access the first customer's key or change their plan.
-        second = {**payload, 'email': 'second-' + email, 'plan': 'free'}
-        del second['business_address']
+        second = {field: value for field, value in payload.items() if field not in company}
+        second.update(email='second-' + email, plan='free')
         status, _, headers = call('/account/api/register', second)
         check(status == 201, 'Free registration failed')
         other_cookie = headers['Set-Cookie'].split(';')[0]

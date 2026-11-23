@@ -10,6 +10,7 @@ test -x "$release_dir/addresswise"
 test -f "$release_dir/scripts/verify_accounts.py"
 test -f "$release_dir/db/0006_customer_accounts.sql"
 test -f "$release_dir/db/0007_customer_business_address.sql"
+test -f "$release_dir/db/0008_customer_company_details.sql"
 test ! -e "$release_dir/addresswise.previous"
 systemctl is-active --quiet addresswise
 if systemctl is-active --quiet "$candidate"; then
@@ -33,7 +34,7 @@ cleanup() {
     exit "$result"
 }
 trap cleanup EXIT
-bash -c 'set -a; . /etc/addresswise.env; set +a; exec python3 "$1/scripts/psql_private.py" -X --single-transaction -v ON_ERROR_STOP=1 -f "$1/db/0006_customer_accounts.sql" -f "$1/db/0007_customer_business_address.sql"' bash "$release_dir"
+bash -c 'set -a; . /etc/addresswise.env; set +a; exec python3 "$1/scripts/psql_private.py" -X --single-transaction -v ON_ERROR_STOP=1 -f "$1/db/0006_customer_accounts.sql" -f "$1/db/0007_customer_business_address.sql" -f "$1/db/0008_customer_company_details.sql"' bash "$release_dir"
 systemd-run --quiet --collect --unit "$candidate" --uid=peter \
     --working-directory="$runtime" --property=EnvironmentFile=/etc/addresswise.env \
     /bin/bash -c 'export PORT=8081 HOST=127.0.0.1 COUNTRY_CODES="$2"; exec "$1" serve' bash "$release_dir/addresswise" "$countries"
