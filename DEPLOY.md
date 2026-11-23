@@ -289,3 +289,16 @@ The example rebuilds indexes before each start. For large datasets, a better lon
 2. restart `serve`
 
 That keeps restarts fast and predictable.
+
+## Public website presentation
+
+The homepage, developer quickstart, access page and address tool use the updated
+shared visual style. Static content is embedded in the binary and needs a release
+build. No index, schema or API changes are required for this design release.
+
+Design references: [clear product explanations](https://www.nngroup.com/articles/tagline-blues-whats-the-site-about/),
+[semantic page structure](https://www.w3.org/WAI/tutorials/page-structure/),
+[task-oriented how-to guides](https://diataxis.fr/how-to-guides/), and
+[effective developer documentation](https://engineering.homeoffice.gov.uk/patterns/write-effective-documentation/).
+The public guide leads with a first request, with reference and billing details
+kept in named sections. All snippets use the existing production API contracts.

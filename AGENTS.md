@@ -178,6 +178,18 @@ Autocomplete endpoints require an API key and authorized origin; validation
 requires an active API key. Never expose production keys in commands, logs,
 screenshots, source, or this file.
 
+## Public website design
+
+- The homepage, account page and developer guide share a white/slate palette,
+  blue address accent and teal company accent, responsive layouts and focus states.
+- Keep the homepage order explicit: product explanation and real demos, simple
+  integration examples, package pricing, credit examples/calculator, then FAQs.
+- Code examples offer cURL/JavaScript and copy controls. Match the actual API:
+  autocomplete requires a query key, allowed origin and bare `street_only` flag;
+  Companywise supports Bearer auth. Label abbreviated JSON as examples.
+- Free access is issued by the team. Do not imply instant key delivery or online
+  payment collection until those flows exist. Keep quota and billing copy exact.
+
 ## Shared Companywise platform
 
 - Addresswise owns API keys for both products. Preserve existing address API
