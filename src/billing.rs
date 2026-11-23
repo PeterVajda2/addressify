@@ -42,19 +42,20 @@ impl Operation {
 pub struct Plan {
     pub id: &'static str,
     pub name: &'static str,
-    pub credit_limit: i64,
+    pub credit_limit: Option<i64>,
     pub monthly_price_eur: Option<i64>,
 }
 
 pub fn plan(id: &str, custom_limit: Option<i64>) -> Option<Plan> {
     let (id, name, credit_limit, monthly_price_eur) = match id {
-        "free" => ("free", "Free", 1_000, Some(0)),
-        "starter" => ("starter", "Starter", 100_000, Some(9)),
-        "growth" => ("growth", "Growth", 1_000_000, Some(19)),
+        "free" => ("free", "Free", Some(1_000), Some(0)),
+        "starter" => ("starter", "Starter", Some(100_000), Some(5)),
+        "growth" => ("growth", "Growth", Some(1_000_000), Some(10)),
+        "unlimited" => ("unlimited", "Unlimited", None, Some(25)),
         "custom" => (
             "custom",
             "Custom",
-            custom_limit.filter(|limit| *limit > 0)?,
+            Some(custom_limit.filter(|limit| *limit > 0)?),
             None,
         ),
         _ => return None,
@@ -72,13 +73,13 @@ pub fn suggested_plan(credits: i64) -> &'static str {
         ..=1_000 => "free",
         1_001..=100_000 => "starter",
         100_001..=1_000_000 => "growth",
-        _ => "custom",
+        _ => "unlimited",
     }
 }
 
 pub fn public_config() -> serde_json::Value {
     serde_json::json!({"rates":{"autocomplete":1,"validation":3,"company":5},
-        "plans":[plan("free",None),plan("starter",None),plan("growth",None)],
+        "plans":[plan("free",None),plan("starter",None),plan("growth",None),plan("unlimited",None)],
         "currency":"EUR","reset_timezone":"UTC"})
 }
 
@@ -224,16 +225,17 @@ async fn reserve(
         .bind(key_id).fetch_one(&mut *tx).await?;
     let used: i64 = period.get("used_credits");
     let reserved: i64 = period.get("reserved_credits");
-    if used
-        .checked_add(reserved)
-        .and_then(|total| total.checked_add(operation.cost()))
-        .is_none_or(|total| total > chosen.credit_limit)
+    if let Some(limit) = chosen.credit_limit
+        && used
+            .checked_add(reserved)
+            .and_then(|total| total.checked_add(operation.cost()))
+            .is_none_or(|total| total > limit)
     {
         let retry_after = period.get::<i64, _>("retry_after");
         let quota_payload = serde_json::json!({
             "error":"credit_limit_exceeded", "message":"This request would exceed your chosen package's monthly credit limit. Requests are blocked until the next month or an approved package change. No overage is charged.",
-            "plan":chosen.id,"credit_limit":chosen.credit_limit,"used_credits":used,"reserved_credits":reserved,
-            "requested_credits":operation.cost(),"remaining_credits":(chosen.credit_limit-used-reserved).max(0),
+            "plan":chosen.id,"credit_limit":limit,"used_credits":used,"reserved_credits":reserved,
+            "requested_credits":operation.cost(),"remaining_credits":(limit-used-reserved).max(0),
             "resets_at":period.get::<String,_>("resets_at")
         });
         tx.commit().await?;
@@ -324,7 +326,7 @@ pub(crate) struct CreditReport {
     plan: Plan,
     used_credits: i64,
     reserved_credits: i64,
-    remaining_credits: i64,
+    remaining_credits: Option<i64>,
     is_demo: bool,
     resets_at: String,
     metering_started_at: String,
@@ -366,12 +368,12 @@ pub(crate) async fn report(
     .fetch_optional(&mut *tx)
     .await?;
     let chosen = if let Some(row) = &balance {
-        plan(row.get::<&str, _>("plan_id"), Some(row.get("credit_limit")))
+        plan(row.get::<&str, _>("plan_id"), row.get("credit_limit"))
     } else if !dates.get::<bool, _>("is_current") {
         Some(Plan {
             id: "unrecorded",
             name: "No billing record",
-            credit_limit: 0,
+            credit_limit: Some(0),
             monthly_price_eur: Some(0),
         })
     } else if let Some(row) = &key {
@@ -409,7 +411,9 @@ pub(crate) async fn report(
         plan: chosen,
         used_credits: used,
         reserved_credits: reserved,
-        remaining_credits: (chosen.credit_limit - used - reserved).max(0),
+        remaining_credits: chosen
+            .credit_limit
+            .map(|limit| (limit - used - reserved).max(0)),
         is_demo: demo,
         resets_at: dates.get("resets_at"),
         metering_started_at: dates.get("started_at"),
@@ -511,7 +515,6 @@ pub async fn admin_credits(
 pub struct PlanUpdate {
     id: i64,
     plan: String,
-    custom_credit_limit: Option<i64>,
 }
 
 pub async fn set_plan(
@@ -522,11 +525,11 @@ pub async fn set_plan(
     if let Err((status, message)) = authorize_admin(state, req) {
         return error(status, "admin_error", message);
     }
-    let Some(chosen) = plan(&request.plan, request.custom_credit_limit) else {
+    let Some(chosen) = plan(&request.plan, None) else {
         return error(
             StatusCode::BAD_REQUEST,
             "invalid_plan",
-            "Choose free, starter, growth, or a custom package with a positive hard limit",
+            "Choose Free, Starter, Growth or Unlimited.",
         );
     };
     let Some(pool) = state.auth.pool() else {
@@ -565,7 +568,7 @@ async fn update_plan(pool: &PgPool, id: i64, chosen: Plan) -> Result<PlanChange,
     .bind(id)
     .bind(chosen.id)
     .bind(if chosen.id == "custom" {
-        Some(chosen.credit_limit)
+        chosen.credit_limit
     } else {
         None
     })
@@ -576,7 +579,7 @@ async fn update_plan(pool: &PgPool, id: i64, chosen: Plan) -> Result<PlanChange,
     }
     let current=sqlx::query_scalar::<_,i64>("SELECT used_credits+reserved_credits FROM api_credit_months WHERE api_key_id=$1 AND period=date_trunc('month',now() AT TIME ZONE 'UTC')::date")
         .bind(id).fetch_optional(&mut *tx).await?.unwrap_or(0);
-    if current > chosen.credit_limit {
+    if chosen.credit_limit.is_some_and(|limit| current > limit) {
         return Ok(PlanChange::LimitBelowUsage);
     }
     sqlx::query(
@@ -645,7 +648,7 @@ pub async fn request_access(
         })
         || !matches!(
             request.plan.as_str(),
-            "free" | "starter" | "growth" | "custom"
+            "free" | "starter" | "growth" | "unlimited"
         )
     {
         return error(
@@ -767,6 +770,10 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        sqlx::raw_sql(include_str!("../db/0009_unlimited_pricing.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
         let key = test_key(&pool, 10).await;
         for operation in [Operation::Autocomplete, Operation::Validation] {
             let id = reserve(&pool, key, operation).await.unwrap().ok().unwrap();
@@ -794,7 +801,7 @@ mod tests {
                 summary.reserved_credits,
                 summary.remaining_credits
             ),
-            (4, 0, 6)
+            (4, 0, Some(6))
         );
         assert_eq!(
             summary
@@ -899,8 +906,8 @@ mod tests {
             .unwrap();
         let summary = report(&pool, rollover, None, false).await.unwrap();
         assert_eq!(summary.used_credits, 1);
-        assert_eq!(summary.plan.credit_limit, 100_000);
-        assert_eq!(summary.plan.monthly_price_eur, Some(9));
+        assert_eq!(summary.plan.credit_limit, Some(100_000));
+        assert_eq!(summary.plan.monthly_price_eur, Some(5));
 
         assert_eq!(
             update_plan(&pool, rollover, plan("custom", Some(1)).unwrap())
@@ -917,12 +924,28 @@ mod tests {
             .await
             .unwrap();
         let paid = report(&pool, paid_unused, None, false).await.unwrap();
-        assert_eq!(paid.plan.monthly_price_eur, Some(19));
+        assert_eq!(paid.plan.monthly_price_eur, Some(10));
         let historical = report(&pool, paid_unused, Some("2000-01-01"), false)
             .await
             .unwrap();
         assert_eq!(historical.plan.monthly_price_eur, Some(0));
         assert_eq!(historical.plan.id, "unrecorded");
+        update_plan(&pool, paid_unused, plan("unlimited", None).unwrap())
+            .await
+            .unwrap();
+        let unlimited_request = reserve(&pool, paid_unused, Operation::Company)
+            .await
+            .unwrap()
+            .ok()
+            .unwrap();
+        finalize(&pool, unlimited_request, paid_unused, true)
+            .await
+            .unwrap();
+        let unlimited = report(&pool, paid_unused, None, false).await.unwrap();
+        assert_eq!(
+            (unlimited.used_credits, unlimited.remaining_credits),
+            (5, None)
+        );
         assert_eq!(
             update_plan(&pool, key, plan("custom", Some(3)).unwrap())
                 .await
@@ -935,7 +958,7 @@ mod tests {
                 .unwrap()
                 .plan
                 .credit_limit,
-            10
+            Some(10)
         );
 
         // Revoking/deleting a credential must retain its financial record.
@@ -983,11 +1006,14 @@ mod tests {
             (100_000, "starter"),
             (100_001, "growth"),
             (1_000_000, "growth"),
-            (1_000_001, "custom"),
+            (1_000_001, "unlimited"),
         ] {
             assert_eq!(suggested_plan(credits), expected);
         }
         assert!(plan("custom", None).is_none());
         assert!(plan("custom", Some(-1)).is_none());
+        let unlimited = plan("unlimited", None).unwrap();
+        assert_eq!(unlimited.credit_limit, None);
+        assert_eq!(unlimited.monthly_price_eur, Some(25));
     }
 }

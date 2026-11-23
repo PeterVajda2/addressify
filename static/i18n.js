@@ -10,11 +10,11 @@
     const f=formats[language];let m;
     if((m=value.match(/^(.*?) credits per entry · (.*?) credits\/month\. (.*)$/s)))return `${m[1]} ${f.entry} · ${m[2]} ${f.perMonth}. ${text(m[3])}`;
     if((m=value.match(/^(.*?) \(€(.*?)\/month\) fits this estimate\. Your chosen package never upgrades automatically\.$/s)))return `${text(m[1])} (${m[2]} €/${f.month}) ${f.fits} ${text('Your chosen package never upgrades automatically.')}`;
-    if((m=value.match(/^Over 1,000,000 credits: send a custom enquiry\. Your chosen package never upgrades automatically\.$/)))return text('Over 1,000,000 credits: send a custom enquiry.')+' '+text('Your chosen package never upgrades automatically.');
     if((m=value.match(/^(.*?) credits are reserved by requests currently in progress\.$/)))return `${m[1]} ${f.reserved}`;
     if(value.startsWith('Hard limit: requests that would exceed this package'))return f.hard+' '+value.split('Reset: ')[1];
     if((m=value.match(/^Credit metering started (.*?)\. Earlier combined request counts are not retroactively converted or charged\.$/)))return `${f.started} ${m[1]}. ${f.earlier}`;
     if((m=value.match(/^(.*?) · (.*?) credits\/month · (.*)$/)))return `${text(m[1])} · ${m[2]} ${f.perMonth} · ${text(m[3]).replace('/month','/'+f.month)}`;
+    if((m=value.match(/^Unlimited · No monthly credit limit · €(\d+)\/month$/)))return `Unlimited · ${text('No monthly credit limit')} · ${m[1]} €/${f.month}`;
     if((m=value.match(/^Established (.*)$/)))return f.established+' '+m[1];
     if((m=value.match(/^(✓ Validated|Needs review) · (.*?)% confidence$/)))return text(m[1])+` · ${m[2]}% ${f.confidence}`;
     if((m=value.match(/^Responses received in these demos: (\d+) autocomplete × 1 \+ (\d+) validation × 3 \+ (\d+) company × 5 = (.*?) example credits\..*$/)))return `${f.count} ${m[1]} × 1 + ${m[2]} × 3 + ${m[3]} × 5 = ${m[4]} ${f.credits}. ${f.demo}`;

@@ -46,10 +46,10 @@ package requests are reviewed and manually activated by the administrator.
 ## Credit packages and rollout
 
 Prices are per chosen monthly package: Free includes 1,000 credits for EUR 0;
-Starter includes 100,000 for EUR 9; Growth includes 1,000,000 for EUR 19. Higher
-volumes use a negotiated custom limit. There is no automatic upgrade or overage.
-Every API key shares one allowance across both products; issue one customer key
-for a shared customer allowance. Multiple keys have independent allowances.
+Starter includes 100,000 for EUR 5, Growth includes 1,000,000 for EUR 10,
+and Unlimited has no monthly credit cap for EUR 25. There is no automatic upgrade or overage.
+Each plan covers both products for one API key. Multiple keys have independent
+allowances. Unlimited records usage and reports null for the limit and balance.
 
 Successful autocomplete requests cost 1 credit, address validation 3 and company
 retrieval 5. This includes successful empty results, `valid=false`, repeats and
@@ -77,9 +77,9 @@ preserve current usage and cannot lower the limit below used/pending credits.
 
 The homepage pricing cards include consumption examples and a calculator.
 `/account` shows credits and accepts package/access enquiries, which appear in
-`/admin`. Paid/custom package requests do not activate themselves. Review the
+`/admin`. Paid plans require confirmed payment before activation. Review the
 request, confirm the customer/payment arrangement, then create/edit the key and
-choose its package in admin. Custom limits are entered explicitly. Mark the
+choose its plan in admin. Mark the
 enquiry handled after provisioning. Card charging and automatic invoice delivery
 are not implemented. Admin CSV export separates credit billing from raw request
 history.
@@ -332,7 +332,7 @@ contract records. The access enquiry is not a binding paid order.
 
 ## Customer accounts
 
-Apply migrations 0006 through 0008 before starting this binary. `deploy/rollout-accounts.sh` applies
+Apply migrations 0006 through 0009 before starting this binary. `deploy/rollout-accounts.sh` applies
 the additive migrations and exercises a temporary customer account before and
 after cutover. It preserves existing credentials and their usage history.
 Registration provisions a Free key and records the selected plan and accepted

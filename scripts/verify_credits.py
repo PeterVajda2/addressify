@@ -2,20 +2,18 @@
 """Verify real HTTP credit costs/limits using only keys created by this check.
 
 Production rollout supplies credentials privately in the environment. Database
-access is used only to remove this check's temporary financial records; real
-customers' retained billing history is never touched.
+access is used to prepare small quota fixtures and clean up this check’s
+temporary financial records.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-import json
 import os
+import subprocess
 from urllib.parse import urlencode
 from uuid import uuid4
 
+from psql_private import connection_environment
 from verify_platform import check, request, cleanup_history
-
-
-
 
 def verify(base):
     admin = {'X-Admin-Key': os.environ['ADMIN_API_KEY']}
@@ -27,9 +25,13 @@ def verify(base):
                               body={'label': 'Credit verification temporary', 'domains': ['addresswise.eu']})
         check(status == 201, 'Temporary key creation failed')
         keys.append(key)
-        check(request(base, '/admin/api/billing/plan', headers=admin,
-                      body={'id': key['id'], 'plan': 'custom', 'custom_credit_limit': limit})[0] == 200,
-              'Temporary custom limit activation failed')
+        key_id = int(key['id'])
+        result = subprocess.run(
+            ['psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1'], text=True, capture_output=True,
+            env=connection_environment(),
+            input=f"UPDATE api_keys SET billing_plan='custom',custom_credit_limit={int(limit)} WHERE id={key_id};",
+        )
+        check(result.returncode == 0, 'Temporary quota fixture setup failed')
         return key
 
     def auth(key):
@@ -81,14 +83,14 @@ def verify(base):
               'Exact hard limit must block the next request with a clear 429 error')
         check(balance(key)['used_credits'] == 20, 'Blocked request must cost zero')
         check(request(base, '/admin/api/billing/plan', headers=admin,
-                      body={'id': key['id'], 'plan': 'custom', 'custom_credit_limit': 19})[0] == 409,
-              'Downgrade below credits already used must be rejected')
+                      body={'id': key['id'], 'plan': 'custom', 'custom_credit_limit': 19})[0] == 400,
+              'Custom plans must not be offered for activation')
         check(request(base, '/admin/api/billing/plan', headers=admin,
                       body={'id': key['id'], 'plan': 'starter'})[0] == 200,
               'Approved package activation failed')
         upgraded = balance(key)
         check(upgraded['plan']['id'] == 'starter' and upgraded['plan']['credit_limit'] == 100_000
-              and upgraded['plan']['monthly_price_eur'] == 9 and upgraded['used_credits'] == 20,
+              and upgraded['plan']['monthly_price_eur'] == 5 and upgraded['used_credits'] == 20,
               'Changing package must not reset usage or invent an overage')
         check(search(key)[0] == 200 and balance(key)['used_credits'] == 21,
               'Approved larger package must restore access')

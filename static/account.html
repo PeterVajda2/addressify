@@ -42,9 +42,9 @@
 <label>Website domain<input name="domain" required maxlength="253" placeholder="example.com" autocomplete="off" spellcheck="false"></label>
 <p>The domain and its subdomains are allowed for autocomplete.</p>
 <label>Monthly package<select name="plan" id="request-plan"><option value="free">Free · 1,000 credits · €0/month</option>
-<option value="starter">Starter · 100,000 credits · €9/month</option>
-<option value="growth">Growth · 1,000,000 credits · €19/month</option>
-<option value="custom">Custom · over 1 million · send an enquiry</option></select></label>
+<option value="starter">Starter · 100,000 credits · €5/month</option>
+<option value="growth">Growth · 1,000,000 credits · €10/month</option>
+<option value="unlimited">Unlimited · €25/month</option></select></label>
 <label class="estimate-check"><input name="business" type="checkbox" required> I am registering for business use.</label>
 <label class="estimate-check"><input name="terms" type="checkbox" required> I accept the <a href="/terms" target="_blank" rel="noopener">Terms of service</a>.</label>
 <button class="button" type="submit" disabled>Create account</button>
@@ -65,9 +65,9 @@
 <section class="account-panel"><h3>Subscription</h3>
 <p class="subscription-plan"><span>Active plan</span><strong id="active-plan" data-source></strong></p>
 <p id="cancel-effective" hidden>Free starts at <time id="cancel-at"></time> (UTC).</p>
-<form id="upgrade-form" method="post"><label>Choose a paid plan<select name="plan"><option value="starter">Starter · 100,000 credits · €9/month</option>
-<option value="growth">Growth · 1,000,000 credits · €19/month</option>
-<option value="custom">Custom · over 1 million · send an enquiry</option></select></label>
+<form id="upgrade-form" method="post"><label>Choose a paid plan<select name="plan"><option value="starter">Starter · 100,000 credits · €5/month</option>
+<option value="growth">Growth · 1,000,000 credits · €10/month</option>
+<option value="unlimited">Unlimited · €25/month</option></select></label>
 <div class="actions"><button class="button secondary" type="submit">Select plan</button></div></form>
 <div id="payment-panel" hidden><p><span>Pending upgrade</span> · <strong id="selected-plan" data-source></strong></p>
 <p>GoPay checkout is coming soon. Payment is required to activate a paid upgrade.</p>
@@ -109,8 +109,8 @@ form.addEventListener('submit',async event=>{event.preventDefault();const curren
 disconnect.addEventListener('click',()=>{sequence++;key.value='';usage.hidden=true;document.getElementById('credit-usage').hidden=true;document.getElementById('raw-history').hidden=true;disconnect.hidden=true;message.textContent='Key cleared.';button.disabled=false;document.getElementById('usage-rows').replaceChildren();key.focus()});
 
 const byId=id=>document.getElementById(id);const operationNames={autocomplete:'Address autocomplete',validation:'Address validation',company:'Company details'};
-function renderCredits(data){byId('credit-usage').hidden=false;byId('credit-plan').textContent=data.plan.name+' · '+data.plan.credit_limit.toLocaleString()+' credits/month · '+(data.plan.monthly_price_eur===null?'Agreed custom pricing':'€'+data.plan.monthly_price_eur+'/month');byId('credits-used').textContent=data.used_credits.toLocaleString();byId('credits-remaining').textContent=data.is_demo?'Demo key':data.remaining_credits.toLocaleString();byId('credit-pending').textContent=data.reserved_credits?data.reserved_credits.toLocaleString()+' credits are reserved by requests currently in progress.':'';byId('credit-limit-note').textContent=data.is_demo?'This public demo key is separate from customer allowances.':'Hard limit: requests that would exceed this package are blocked with HTTP 429 / credit_limit_exceeded. Reset: '+data.resets_at;byId('credit-history-note').textContent='Credit metering started '+data.metering_started_at+'. Earlier combined request counts are not retroactively converted or charged.';const ops=new Map(data.operations.map(row=>[row.operation,row]));byId('credit-rows').replaceChildren(...Object.entries(operationNames).map(([id,name])=>{const row=ops.get(id)||{requests:0,credits:0};const tr=document.createElement('tr');for(const value of [name,row.requests.toLocaleString(),row.credits.toLocaleString()]){const td=document.createElement('td');td.textContent=value;tr.append(td)}return tr}));}
+function renderCredits(data){byId('credit-usage').hidden=false;byId('credit-plan').textContent=data.plan.name+' · '+(data.plan.credit_limit===null?'No monthly credit limit':data.plan.credit_limit.toLocaleString()+' credits/month')+' · '+(data.plan.monthly_price_eur===null?'Agreed custom pricing':'€'+data.plan.monthly_price_eur+'/month');byId('credits-used').textContent=data.used_credits.toLocaleString();byId('credits-remaining').textContent=data.is_demo?'Demo key':(data.remaining_credits===null?'Unlimited':data.remaining_credits.toLocaleString());byId('credit-pending').textContent=data.reserved_credits?data.reserved_credits.toLocaleString()+' credits are reserved by requests currently in progress.':'';byId('credit-limit-note').hidden=data.plan.credit_limit===null;byId('credit-limit-note').textContent=data.is_demo?'This public demo key is separate from customer allowances.':'Hard limit: requests that would exceed this package are blocked with HTTP 429 / credit_limit_exceeded. Reset: '+data.resets_at;byId('credit-history-note').textContent='Credit metering started '+data.metering_started_at+'. Earlier combined request counts are not retroactively converted or charged.';const ops=new Map(data.operations.map(row=>[row.operation,row]));byId('credit-rows').replaceChildren(...Object.entries(operationNames).map(([id,name])=>{const row=ops.get(id)||{requests:0,credits:0};const tr=document.createElement('tr');for(const value of [name,row.requests.toLocaleString(),row.credits.toLocaleString()]){const td=document.createElement('td');td.textContent=value;tr.append(td)}return tr}));}
 /* Registration and signed-in account controls are in account.js. */
 window.AddresswiseRegistrationDemo = {key: __DEMO_API_KEY__, countries: __DEMO_COUNTRIES__};
-const selectedPlan=new URLSearchParams(location.search).get('plan');if(['free','starter','growth','custom'].includes(selectedPlan))byId('request-plan').value=selectedPlan;
+const selectedPlan=new URLSearchParams(location.search).get('plan');if(['free','starter','growth','unlimited'].includes(selectedPlan))byId('request-plan').value=selectedPlan;
 </script><script>__ACCOUNT_SCRIPT__</script></body></html>

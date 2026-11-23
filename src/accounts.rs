@@ -22,7 +22,7 @@ use xitca_web::{
     http::{StatusCode, WebRequest, WebResponse, header},
 };
 
-pub const TERMS_VERSION: &str = "2026-11-23-accounts";
+pub const TERMS_VERSION: &str = "2026-11-23-pricing";
 const COOKIE: &str = "__Host-addresswise_session";
 static HASH_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 static DUMMY_HASH: LazyLock<String> =
@@ -320,7 +320,7 @@ pub async fn register(
         || !request.website.is_empty()
         || !matches!(
             request.plan.as_str(),
-            "free" | "starter" | "growth" | "custom"
+            "free" | "starter" | "growth" | "unlimited"
         )
         || !matches!(request.language.as_str(), "cs" | "sk" | "en")
         || !request.business
@@ -802,11 +802,11 @@ pub async fn select_plan(
     Json(request): Json<SubscriptionRequest>,
     req: &WebRequest<()>,
 ) -> WebResponse {
-    if !matches!(request.plan.as_str(), "starter" | "growth" | "custom") {
+    if !matches!(request.plan.as_str(), "starter" | "growth" | "unlimited") {
         return error(
             StatusCode::BAD_REQUEST,
             "invalid_plan",
-            "Choose Starter, Growth or Custom. Use cancellation to return to Free.",
+            "Choose Starter, Growth or Unlimited. Use cancellation to return to Free.",
         );
     }
     mutate_subscription(state, req, Some(&request.plan)).await

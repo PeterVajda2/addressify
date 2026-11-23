@@ -4,8 +4,8 @@
   const status = element('account-status');
   const translate = window.AddresswiseI18n.text;
   const language = document.documentElement.lang;
-  const plans = ['free', 'starter', 'growth', 'custom'];
-  const names = {free: 'Free', starter: 'Starter', growth: 'Growth', custom: 'Custom'};
+  const plans = ['free', 'starter', 'growth', 'unlimited'];
+  const names = {free: 'Free', starter: 'Starter', growth: 'Growth', unlimited: 'Unlimited', custom: 'Legacy plan'};
   const domainForm = element('domain-form');
   const domainList = element('domain-list');
   const domainStatus = element('domain-status');
@@ -51,7 +51,7 @@
     element('selected-plan').textContent = translate(names[selected]);
     element('cancel-effective').hidden = !cancelling;
     element('cancel-at').textContent = cancelling ? billingDate.format(new Date(subscription.cancel_at)) : '';
-    element('upgrade-form').elements.plan.value = selected === 'free' ? 'starter' : selected;
+    element('upgrade-form').elements.plan.value = selected === 'free' || selected === 'custom' ? 'starter' : selected;
     element('upgrade-form').hidden = cancelling;
     element('payment-panel').hidden = !pending || cancelling;
     element('cancel-subscription').hidden = cancelling || (active === 'free' && !pending);
@@ -310,7 +310,7 @@
     resetLookup();
     cancelAddressSearch();
     await api('register', {...data, business: data.business === 'on', accept_terms: data.terms === 'on',
-      terms_version: '2026-11-23-accounts', language});
+      terms_version: '2026-11-23-pricing', language});
     await load();
     openAccount();
     status.textContent = 'Your account is ready.';

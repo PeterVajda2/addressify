@@ -50,7 +50,7 @@ def verify(base):
                    'street': 'Custom business address', 'city': 'Praha', 'postal_code': '110 00'}
         payload = {'name': 'Account verification temporary', 'email': email, **company,
                    'password': password, 'domain': 'MyDomain.COM', 'plan': 'growth',
-                   'business': True, 'accept_terms': True, 'terms_version': '2026-11-23-accounts',
+                   'business': True, 'accept_terms': True, 'terms_version': '2026-11-23-pricing',
                    'language': 'cs'}
         check(call('/account/api/me')[0] == 401, 'Account must require a session')
         check(call('/account/api/register', payload, origin='https://example.invalid')[0] == 403,
@@ -94,8 +94,9 @@ def verify(base):
               'Cancelling a pending upgrade failed')
         profile = call('/account/api/me', cookie=cookie)[1]
         check(profile['subscription']['selected_plan'] == 'free', 'Pending upgrade was retained')
-        check(call('/admin/api/billing/plan', {'id': key_id, 'plan': 'starter'}, headers=admin)[0] == 200,
-              'Manual paid activation failed')
+        status, plan, _ = call('/admin/api/billing/plan', {'id': key_id, 'plan': 'starter'}, headers=admin)
+        check(status == 200 and plan['monthly_price_eur'] == 5 and plan['credit_limit'] == 100_000,
+              'Starter activation or pricing failed')
         check(call('/account/api/subscription/cancel', {}, cookie=cookie, csrf=csrf)[0] == 200,
               'Paid cancellation failed')
         profile = call('/account/api/me', cookie=cookie)[1]
@@ -132,6 +133,25 @@ def verify(base):
         check(call(validation, address, origin=other)[0] == 200,
               'An empty domain list changed direct validation')
         check(call('/account/api/me', cookie=cookie)[1]['domains'] == [], 'An empty allowlist did not persist')
+        check(call('/account/api/subscription', {'plan': 'custom'}, cookie=cookie, csrf=csrf)[0] == 400,
+              'A new custom enquiry was accepted')
+        status, plan, _ = call('/admin/api/billing/plan', {'id': key_id, 'plan': 'growth'}, headers=admin)
+        check(status == 200 and plan['monthly_price_eur'] == 10 and plan['credit_limit'] == 1_000_000,
+              'Growth activation or pricing failed')
+        check(call('/account/api/subscription', {'plan': 'unlimited'}, cookie=cookie, csrf=csrf)[0] == 200,
+              'Unlimited could not be selected')
+        current = call('/account/api/me', cookie=cookie)[1]['subscription']
+        check(current['active_plan'] == 'growth' and current['selected_plan'] == 'unlimited',
+              'Unlimited selection must wait for paid activation')
+        status, plan, _ = call('/admin/api/billing/plan', {'id': key_id, 'plan': 'unlimited'}, headers=admin)
+        check(status == 200 and plan['monthly_price_eur'] == 25 and plan['credit_limit'] is None,
+              'Unlimited activation or pricing failed')
+        sql(f"""UPDATE api_credit_months SET used_credits=1000000
+                WHERE api_key_id={key_id} AND period=date_trunc('month',now() AT TIME ZONE 'UTC')::date;""")
+        check(call(validation, address, origin=other)[0] == 200, 'Unlimited blocked usage above 1 million credits')
+        credits = call('/account/api/me', cookie=cookie)[1]['credits']
+        check(credits['used_credits'] == 1000003 and credits['remaining_credits'] is None,
+              'Unlimited must report usage without a finite remaining balance')
         check(call('/account/api/logout', {}, cookie=cookie, csrf=csrf)[0] == 200, 'Logout failed')
         check(call('/account/api/me', cookie=cookie)[0] == 401, 'Logged-out session still works')
         check(call('/account/api/login', {'email': email, 'password': 'incorrect'})[0] == 401,

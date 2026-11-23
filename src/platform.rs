@@ -34,8 +34,11 @@ fn demo_template(page: &str, state: &AppState) -> String {
     let demo_key = serde_json::to_string(&state.demo_api_key)
         .expect("public demo key")
         .replace('<', "\\u003c");
-    let countries =
-        serde_json::to_string(&state.indexes.country_codes()).expect("active countries");
+    let mut countries = state.indexes.country_codes();
+    if state.tomtom_api_key.is_some() && !countries.contains(&"GB") {
+        countries.push("GB");
+    }
+    let countries = serde_json::to_string(&countries).expect("available demo countries");
     page.replace("__DEMO_API_KEY__", &demo_key)
         .replace("__DEMO_COUNTRIES__", &countries)
 }

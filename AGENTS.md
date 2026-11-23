@@ -151,8 +151,8 @@ country set is:
 AT BE BG CH CZ DE DK EE ES FI FR HR HU IT LT LU LV NL NO PL PT RS SI SK
 ```
 
-GB and IE are intentionally disabled and their production data and indexes
-were removed on 2026-08-22.
+GB and IE have no local production indexes. The homepage demo includes GB
+when the server-side TomTom key is configured.
 
 ## Demo and API checks
 
@@ -238,10 +238,11 @@ screenshots, source, or this file.
 ## Credit billing
 
 - `src/billing.rs` owns costs (autocomplete 1, validation 3, company 5), package
-  limits (Free 1,000; Starter 100,000 for EUR 9; Growth 1,000,000 for EUR 19),
+  limits (Free 1,000; Starter 100,000 for EUR 5; Growth 1,000,000 for EUR 10;
+  Unlimited without a monthly cap for EUR 25),
   UTC periods, reservations, reports, enquiries and admin activation.
-- Limits are chosen packages, never automatic upgrades or overages. Custom
-  limits require admin approval. Paid access is manually activated after the
+- Plans are selected explicitly. Online payment remains a placeholder, and
+  paid access is manually activated after the
   customer/payment arrangement is confirmed; no card is charged by this code.
 - New and existing keys default to Free when migration 0005 is first applied.
   The existing public demo key is separate from customer credits, with a shared
