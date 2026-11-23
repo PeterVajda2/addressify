@@ -180,6 +180,39 @@ pub fn serve_with_state(addr: String, state: Arc<AppState>) -> AppResult<()> {
             "/admin/api/access-requests/handled",
             post(handler_service(crate::billing::handle_request)),
         )
+        .at(
+            "/account/api/register",
+            post(handler_service(crate::accounts::register)),
+        )
+        .at(
+            "/account/api/login",
+            post(handler_service(crate::accounts::login)),
+        )
+        .at(
+            "/account/api/logout",
+            post(handler_service(crate::accounts::logout)),
+        )
+        .at("/account/api/me", get(handler_service(crate::accounts::me)))
+        .at(
+            "/account/api/subscription",
+            post(handler_service(crate::accounts::select_plan)),
+        )
+        .at(
+            "/account/api/subscription/cancel",
+            post(handler_service(crate::accounts::cancel)),
+        )
+        .at(
+            "/account/api/payment",
+            post(handler_service(crate::accounts::payment)),
+        )
+        .at(
+            "/account/api/password",
+            post(handler_service(crate::accounts::change_password)),
+        )
+        .at(
+            "/assets/addresswise-account.js",
+            get(handler_service(crate::i18n::account_script)),
+        )
         .at("/health", get(handler_service(health)))
         .at("/addresswise", get(handler_service(home)))
         .at("/account", get(handler_service(crate::platform::account)))
@@ -536,7 +569,7 @@ fn normalize_label(label: Option<String>) -> Result<Option<String>, &'static str
     }
 }
 
-fn generate_api_key() -> String {
+pub(crate) fn generate_api_key() -> String {
     let mut bytes = [0_u8; 24];
     rand::rng().fill_bytes(&mut bytes);
     let token = bytes

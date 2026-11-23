@@ -134,7 +134,14 @@ async fn authorize_request(
 
     let request_domain = request_domain_for_authorization(req, require_domain)?;
 
-    let cache_key = (api_key.to_owned(), request_domain.clone());
+    let cache_key = (
+        api_key.to_owned(),
+        if require_domain {
+            request_domain.clone()
+        } else {
+            String::new()
+        },
+    );
     let api_key_id = cached_api_key_id(service, &cache_key, require_domain).await?;
     queue_usage(
         service,
@@ -184,7 +191,11 @@ async fn cached_api_key_id(
             "select exists(
                 select 1
                 from api_key_domains
-                where api_key_id = $1 and domain = $2
+                where api_key_id = $1 and (
+                    domain = $2 OR (position('.' in domain)>0
+                    AND domain !~ '^[0-9.]+$'
+                    AND right($2,length(domain)+1)='.'||domain)
+                )
             )",
         )
         .bind(api_key_id)

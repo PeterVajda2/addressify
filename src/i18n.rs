@@ -80,8 +80,15 @@ pub fn html(body: impl Into<String>, language: Language) -> WebResponse {
     response
 }
 pub async fn script() -> WebResponse {
-    let mut response =
-        WebResponse::new(include_str!("../static/i18n.js").as_bytes().to_vec().into());
+    javascript(include_str!("../static/i18n.js"))
+}
+
+pub async fn account_script() -> WebResponse {
+    javascript(include_str!("../static/account.js"))
+}
+
+fn javascript(source: &str) -> WebResponse {
+    let mut response = WebResponse::new(source.as_bytes().to_vec().into());
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         header::HeaderValue::from_static("text/javascript; charset=utf-8"),

@@ -187,6 +187,11 @@ async fn reserve(
     operation: Operation,
 ) -> Result<Result<i64, Box<WebResponse>>, sqlx::Error> {
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT id FROM api_keys WHERE id=$1 FOR UPDATE")
+        .bind(key_id)
+        .execute(&mut *tx)
+        .await?;
+    crate::accounts::apply_cancellation(&mut tx, key_id).await?;
     let row=sqlx::query("SELECT billing_plan, custom_credit_limit, label FROM api_keys WHERE id=$1 AND is_active FOR UPDATE")
         .bind(key_id).fetch_optional(&mut *tx).await?;
     let Some(row) = row else {
@@ -311,7 +316,7 @@ struct OperationUsage {
 }
 
 #[derive(Serialize)]
-struct CreditReport {
+pub(crate) struct CreditReport {
     api_key_id: i64,
     label: Option<String>,
     archived: bool,
@@ -327,13 +332,18 @@ struct CreditReport {
     suggested_plan: &'static str,
 }
 
-async fn report(
+pub(crate) async fn report(
     pool: &PgPool,
     id: i64,
     month: Option<&str>,
     demo: bool,
 ) -> Result<CreditReport, sqlx::Error> {
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT id FROM api_keys WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    crate::accounts::apply_cancellation(&mut tx, id).await?;
     let key = sqlx::query(
         "SELECT label,billing_plan,custom_credit_limit FROM api_keys WHERE id=$1 FOR UPDATE",
     )
@@ -544,6 +554,11 @@ enum PlanChange {
 }
 async fn update_plan(pool: &PgPool, id: i64, chosen: Plan) -> Result<PlanChange, sqlx::Error> {
     let mut tx = pool.begin().await?;
+    let old_plan =
+        sqlx::query_scalar::<_, String>("SELECT billing_plan FROM api_keys WHERE id=$1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
     let result = sqlx::query(
         "UPDATE api_keys SET billing_plan=$2,custom_credit_limit=$3,updated_at=now() WHERE id=$1",
     )
@@ -576,6 +591,15 @@ async fn update_plan(pool: &PgPool, id: i64, chosen: Plan) -> Result<PlanChange,
     .bind(chosen.monthly_price_eur)
     .execute(&mut *tx)
     .await?;
+    if old_plan.as_deref() != Some(chosen.id) {
+        sqlx::query(
+            "UPDATE customer_accounts SET requested_plan=$2,cancel_at=NULL WHERE api_key_id=$1",
+        )
+        .bind(id)
+        .bind(chosen.id)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     Ok(PlanChange::Applied)
 }
@@ -736,6 +760,10 @@ mod tests {
             .await
             .unwrap();
         sqlx::raw_sql(include_str!("../db/0005_credit_billing.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(include_str!("../db/0006_customer_accounts.sql"))
             .execute(&pool)
             .await
             .unwrap();

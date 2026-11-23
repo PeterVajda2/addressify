@@ -329,3 +329,16 @@ DIČ was not treated as proof of VAT status; tax treatment and the final amount
 are confirmed in the offer. Do not automatically bind existing customers to a
 new terms version: retain their accepted offer/terms version in the manual
 contract records. The access enquiry is not a binding paid order.
+
+## Customer accounts
+
+Apply 0006 before starting this binary. `deploy/rollout-accounts.sh` applies
+the additive migration and exercises a temporary customer account before and
+after cutover. It preserves existing credentials and their usage history.
+Registration provisions a Free key and records the selected plan and accepted
+terms version. The account can display the key, review credits, update the
+password and cancel a pending purchase or paid renewal. Paid access continues
+until the scheduled UTC month boundary and then returns to Free on the first
+account/billing operation. GoPay is disabled pending integration. Set a paid
+plan in the admin only after confirming payment separately. Legacy keys remain
+available through the existing usage form. An email match never links a key.
