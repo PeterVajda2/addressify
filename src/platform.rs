@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use xitca_web::{
-    handler::{html::Html, query::Query, state::StateRef},
+    handler::{query::Query, state::StateRef},
     http::{StatusCode, WebRequest, WebResponse, header},
 };
 
@@ -14,29 +14,48 @@ use crate::auth::{ErrorResponse, error_status, extract_request_domain};
 use crate::billing::{Operation, Reservation};
 use crate::http::{AppState, authorize_admin, json_error, json_ok};
 
-pub async fn landing(StateRef(state): StateRef<'_, Arc<AppState>>) -> Html<String> {
+pub async fn landing(
+    StateRef(state): StateRef<'_, Arc<AppState>>,
+    Query(query): Query<crate::i18n::LanguageQuery>,
+    req: &WebRequest<()>,
+) -> WebResponse {
+    let language = crate::i18n::Language::from_request(&query, req);
     let demo_key = serde_json::to_string(&state.demo_api_key)
-        .expect("serializing the public demo key")
+        .expect("public demo key")
         .replace('<', "\\u003c");
-    let countries = serde_json::to_string(&state.indexes.country_codes())
-        .expect("serializing active demo countries");
-    Html(
-        include_str!("../static/platform.html")
+    let countries =
+        serde_json::to_string(&state.indexes.country_codes()).expect("active countries");
+    crate::i18n::html(
+        crate::i18n::template("platform", language)
             .replace("__DEMO_API_KEY__", &demo_key)
             .replace("__DEMO_COUNTRIES__", &countries)
             .replace(
                 "__BILLING_CONFIG__",
                 &crate::billing::public_config().to_string(),
             ),
+        language,
     )
 }
-
-pub async fn account() -> Html<&'static str> {
-    Html(include_str!("../static/account.html"))
+pub async fn account(
+    Query(query): Query<crate::i18n::LanguageQuery>,
+    req: &WebRequest<()>,
+) -> WebResponse {
+    let language = crate::i18n::Language::from_request(&query, req);
+    crate::i18n::html(crate::i18n::template("account", language), language)
 }
-
-pub async fn docs() -> Html<&'static str> {
-    Html(include_str!("../static/docs.html"))
+pub async fn docs(
+    Query(query): Query<crate::i18n::LanguageQuery>,
+    req: &WebRequest<()>,
+) -> WebResponse {
+    let language = crate::i18n::Language::from_request(&query, req);
+    crate::i18n::html(crate::i18n::template("docs", language), language)
+}
+pub async fn terms(
+    Query(query): Query<crate::i18n::LanguageQuery>,
+    req: &WebRequest<()>,
+) -> WebResponse {
+    let language = crate::i18n::Language::from_request(&query, req);
+    crate::i18n::html(crate::i18n::template("terms", language), language)
 }
 
 #[derive(Deserialize)]

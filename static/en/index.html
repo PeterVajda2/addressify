@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>addresswise</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #fcf7f1;
+      --surface: rgba(255, 253, 250, 0.88);
+      --surface-solid: #fffdfa;
+      --ink: #3f3540;
+      --muted: #786d78;
+      --line: #eadde1;
+      --lavender: #7463a8;
+      --lavender-soft: #eee9fb;
+      --peach: #f8c6ac;
+      --mint: #d8eee4;
+      --shadow: rgba(94, 63, 83, 0.14);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-rounded, "Nunito", "Avenir Next", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 10%, #fae4d7 0 9rem, transparent 9.1rem),
+        radial-gradient(circle at 90% 16%, #e5ddfa 0 12rem, transparent 12.1rem),
+        radial-gradient(circle at 76% 90%, #dcefe6 0 11rem, transparent 11.1rem),
+        var(--bg);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: clamp(1rem, 4vw, 3.5rem);
+    }
+    main {
+      width: min(100%, 43rem);
+      background: var(--surface);
+      border: 1px solid rgba(255, 255, 255, 0.88);
+      border-radius: 2rem;
+      padding: clamp(1.25rem, 5vw, 3rem);
+      box-shadow: 0 1.5rem 4rem var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+    .hero { text-align: center; margin-bottom: 2rem; }
+    .brand-mark {
+      width: 3.5rem;
+      height: 3.5rem;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 1rem;
+      border-radius: 1.25rem 1.25rem 1.25rem 0.4rem;
+      color: #fff;
+      background: linear-gradient(135deg, #8e7bc5, #65509b);
+      box-shadow: 0 0.65rem 1.25rem rgba(105, 81, 160, 0.28);
+      transform: rotate(-5deg);
+      font-size: 1.55rem;
+    }
+    .eyebrow {
+      margin: 0 0 0.4rem;
+      color: var(--lavender);
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(2rem, 5vw, 3.15rem);
+      line-height: 1.05;
+      letter-spacing: -0.045em;
+      font-weight: 600;
+    }
+    .intro {
+      max-width: 28rem;
+      margin: 0.8rem auto 0;
+      color: var(--muted);
+      font-size: 0.98rem;
+      line-height: 1.6;
+    }
+    form {
+      display: grid;
+      gap: 1.15rem;
+    }
+    .field {
+      display: grid;
+      gap: 0.45rem;
+    }
+    .field-street {
+      position: relative;
+    }
+    label {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.84rem;
+      font-weight: 750;
+      letter-spacing: 0.01em;
+      color: var(--muted);
+    }
+    label::before { content: ""; width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--peach); }
+    .field-street label::before { background: var(--lavender); }
+    .details-heading { margin: 0.2rem 0 -0.2rem; color: var(--muted); font-size: 0.78rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+    input,
+    select {
+      width: 100%;
+      min-height: 3.35rem;
+      padding: 0.8rem 1rem;
+      border: 1px solid var(--line);
+      border-radius: 1rem;
+      background: var(--surface-solid);
+      color: var(--ink);
+      font: inherit;
+      font-size: 1rem;
+      transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+    }
+    input:focus,
+    select:focus {
+      outline: none;
+      border-color: #a595d2;
+      box-shadow: 0 0 0 0.25rem var(--lavender-soft);
+      transform: translateY(-1px);
+    }
+    input[readonly],
+    input:disabled {
+      background: #f7f2ee;
+      color: #9a8e96;
+      cursor: default;
+    }
+    .grid {
+      display: grid;
+      gap: 0.85rem;
+    }
+    @media (min-width: 640px) {
+      .grid {
+        grid-template-columns: minmax(0, 1fr) 12rem;
+      }
+    }
+    .panel {
+      position: absolute;
+      top: calc(100% + 0.35rem);
+      left: 0;
+      right: 0;
+      z-index: 10;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 1rem;
+      background: var(--surface-solid);
+      height: 15.5rem;
+      display: none;
+      grid-template-rows: minmax(0, 1fr);
+      box-shadow: 0 1rem 2rem rgba(96, 69, 94, 0.15);
+    }
+    .panel.visible {
+      display: grid;
+    }
+    .status {
+      margin: 0;
+      padding: 0.75rem 1rem 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .suggestions {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      overflow: auto;
+      min-height: 0;
+    }
+    .suggestions li + li {
+      border-top: 1px solid #f1e8e9;
+    }
+    .suggestion {
+      width: 100%;
+      position: relative;
+      padding: 0.85rem 1rem 0.85rem 3.2rem;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+      font: inherit;
+      transition: background 140ms ease;
+    }
+    .suggestion::before {
+      content: "⌖";
+      position: absolute;
+      left: 1rem;
+      top: 50%;
+      width: 1.5rem;
+      height: 1.5rem;
+      display: grid;
+      place-items: center;
+      border-radius: 0.55rem;
+      transform: translateY(-50%);
+      color: var(--lavender);
+      background: var(--lavender-soft);
+      font-size: 1rem;
+    }
+    .suggestion:hover,
+    .suggestion:focus {
+      background: #faf4f7;
+      outline: none;
+    }
+    .suggestion strong {
+      display: block;
+      font-size: 0.98rem;
+      font-weight: 750;
+      line-height: 1.4;
+    }
+    .suggestion span {
+      display: block;
+      margin-top: 0.2rem;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.35;
+    }
+    .validation-tool {
+      margin-top: 2rem;
+      padding-top: 1.75rem;
+      border-top: 1px solid var(--line);
+    }
+    .validation-tool h2 {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 1.55rem;
+      font-weight: 600;
+      letter-spacing: -0.025em;
+    }
+    .validation-tool > p {
+      margin: 0.45rem 0 1.15rem;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.5;
+    }
+    .button {
+      min-height: 3.25rem;
+      border: 0;
+      border-radius: 1rem;
+      padding: 0.8rem 1.15rem;
+      color: #fff;
+      background: linear-gradient(135deg, #8e7bc5, #65509b);
+      box-shadow: 0 0.55rem 1rem rgba(105, 81, 160, 0.2);
+      cursor: pointer;
+      font: inherit;
+      font-weight: 800;
+    }
+    .button:hover { filter: brightness(1.05); }
+    .button:disabled { cursor: wait; opacity: 0.7; }
+    .validation-result {
+      display: none;
+      margin-top: 1rem;
+      padding: 1rem;
+      border-radius: 1rem;
+      background: var(--lavender-soft);
+      color: var(--ink);
+      font-size: 0.92rem;
+      line-height: 1.45;
+    }
+    .validation-result.visible { display: block; }
+    .validation-result.valid { background: var(--mint); }
+    .validation-result.error { background: #fde7e1; }
+    .validation-result ul { margin: 0.7rem 0 0; padding-left: 1.25rem; }
+    @media (max-width: 420px) { main { border-radius: 1.5rem; } .hero { margin-bottom: 1.5rem; } }
+
+/* Shared platform palette; demo behavior is unchanged. */
+:root{--bg:#f5f7fb;--surface:#fff;--surface-solid:#fff;--ink:#162239;--muted:#536177;--line:#dce3ec;--lavender:#2454d6;--lavender-soft:#edf2ff;--shadow:rgba(22,34,57,.07)}body{background:var(--bg);font-family:ui-sans-serif,system-ui,sans-serif}main{border:1px solid var(--line);border-radius:16px;backdrop-filter:none}h1{font-family:ui-sans-serif,system-ui,sans-serif}.brand-mark{background:#2454d6;box-shadow:none;transform:none}.eyebrow{font-size:.8rem}
+</style>
+<style>.language-control{display:flex;align-items:center;gap:8px;margin:0;font-size:13px;font-weight:600;white-space:nowrap}.language-control>span{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0)}.language-control select{width:73px;min-height:40px;padding:8px;border:1px solid #9dabbf;border-radius:7px;background-color:white;color:#162239;font:600 13px system-ui}.locale-toolbar{display:flex;justify-content:flex-end;margin-bottom:16px}.main-nav>.links{flex:1;justify-content:flex-end}.business-note{font-size:14px;color:#536177;margin-top:18px}footer .terms-link{white-space:nowrap}@media(max-width:740px){.main-nav>.brand{order:1}.main-nav>.language-control{order:2;margin-left:auto}.main-nav>.links{order:3;flex:1 0 100%;gap:12px;justify-content:space-between}.custom-price{white-space:normal;font-size:26px;line-height:1.15}}@media print{.docs-layout{display:block}.wrap{width:100%}nav,.language-control,.docs-sidebar,.skip-link{display:none!important}.section{break-inside:avoid}body{font-size:11pt}}</style><script>window.AddresswiseMessages={};</script><script src="/assets/addresswise-i18n.js"></script></head>
+<body>
+  <main><div class="locale-toolbar"><label class="language-control" for="language-selector"><span>Language</span><select id="language-selector" aria-label="Language"><option value="cs">CZ</option><option value="sk">SK</option><option value="en" selected>EN</option></select></label></div>
+    <nav aria-label="Product navigation" style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-bottom:2rem;font-size:.85rem"><a href="/?lang=en">⌖ Addresswise platform</a><a href="/companywise/?lang=en">Company checks ↗</a><a href="/docs?lang=en#addresswise">API guide ↗</a><a href="/account?lang=en">API usage ↗</a></nav>
+    <header class="hero">
+      <div class="brand-mark" aria-hidden="true">⌖</div>
+      <p class="eyebrow">addresswise</p>
+      <h1>A little help finding your way</h1>
+      <p class="intro">Choose a country, start typing a street, then add the house number. City and postal code fill in from your selected address.</p>
+    </header>
+    <form id="search-form" aria-label="Address lookup">
+        <div class="field">
+          <label for="country-input">Country</label>
+          <select id="country-input" name="country" required>
+            <option value="" selected disabled>Select a country</option>
+            <option value="AT">Austria</option>
+            <option value="BE">Belgium</option>
+            <option value="BG">Bulgaria</option>
+            <option value="CZ">Czechia</option>
+            <option value="DK">Denmark</option>
+            <option value="EE">Estonia</option>
+            <option value="FI">Finland</option>
+            <option value="FR">France</option>
+            <option value="DE">Germany</option>
+            <option value="GB">Great Britain</option>
+            <option value="HR">Croatia</option>
+            <option value="HU">Hungary</option>
+            <option value="IE">Ireland</option>
+            <option value="IT">Italy</option>
+            <option value="LV">Latvia</option>
+            <option value="LT">Lithuania</option>
+            <option value="LU">Luxembourg</option>
+            <option value="NL">Netherlands</option>
+            <option value="NO">Norway</option>
+            <option value="PL">Poland</option>
+            <option value="PT">Portugal</option>
+            <option value="RS">Serbia</option>
+            <option value="SK">Slovakia</option>
+            <option value="SI">Slovenia</option>
+            <option value="ES">Spain</option>
+            <option value="CH">Switzerland</option>
+          </select>
+        </div>
+        <div class="field field-street">
+          <label for="street-input">Street &amp; house number</label>
+          <input id="street-input" name="q" type="text" placeholder="Select a country first" autocomplete="street-address" spellcheck="false" disabled>
+          <section class="panel" aria-label="Suggestions">
+            <ul class="suggestions" id="results"></ul>
+          </section>
+      </div>
+      <p class="details-heading">Address details</p>
+      <div class="grid">
+        <div class="field">
+          <label for="city-input">City</label>
+          <input id="city-input" name="city" type="text" readonly>
+        </div>
+        <div class="field">
+          <label for="postal-code-input">Postal code</label>
+          <input id="postal-code-input" name="postal_code" type="text" placeholder="Filled from your address" readonly>
+        </div>
+      </div>
+    </form>
+    <section class="validation-tool" aria-labelledby="validation-heading">
+      <h2 id="validation-heading">Validate an address</h2>
+      <p>Check a complete address, see our confidence score, and get a canonical correction or nearby alternatives.</p>
+      <form id="validation-form" aria-label="Address validation">
+        <div class="field">
+          <label for="validation-country">Country</label>
+          <select id="validation-country" name="country" required>
+            <option value="" selected disabled>Select a country</option>
+            <option value="AT">Austria</option>
+            <option value="BE">Belgium</option>
+            <option value="BG">Bulgaria</option>
+            <option value="CZ">Czechia</option>
+            <option value="DK">Denmark</option>
+            <option value="EE">Estonia</option>
+            <option value="FI">Finland</option>
+            <option value="FR">France</option>
+            <option value="DE">Germany</option>
+            <option value="GB">Great Britain</option>
+            <option value="HR">Croatia</option>
+            <option value="HU">Hungary</option>
+            <option value="IE">Ireland</option>
+            <option value="IT">Italy</option>
+            <option value="LV">Latvia</option>
+            <option value="LT">Lithuania</option>
+            <option value="LU">Luxembourg</option>
+            <option value="NL">Netherlands</option>
+            <option value="NO">Norway</option>
+            <option value="PL">Poland</option>
+            <option value="PT">Portugal</option>
+            <option value="RS">Serbia</option>
+            <option value="SK">Slovakia</option>
+            <option value="SI">Slovenia</option>
+            <option value="ES">Spain</option>
+            <option value="CH">Switzerland</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="validation-street">Street</label>
+          <input id="validation-street" name="street" type="text" autocomplete="address-line1" required>
+        </div>
+        <div class="grid">
+          <div class="field">
+            <label for="validation-house-number">House number</label>
+            <input id="validation-house-number" name="house_number" type="text" autocomplete="address-line2" required>
+          </div>
+          <div class="field">
+            <label for="validation-postal-code">Postal code</label>
+            <input id="validation-postal-code" name="postal_code" type="text" autocomplete="postal-code" required>
+          </div>
+        </div>
+        <div class="field">
+          <label for="validation-city">City</label>
+          <input id="validation-city" name="city" type="text" autocomplete="address-level2" required>
+        </div>
+        <button class="button" id="validate-button" type="submit">Validate address</button>
+      </form>
+      <div class="validation-result" id="validation-result" role="status" aria-live="polite"></div>
+    </section>
+  <p><a href="/terms?lang=en">Terms of service</a></p></main>
+  <script>
+    const form = document.getElementById("search-form");
+    const countryInput = document.getElementById("country-input");
+    const streetInput = document.getElementById("street-input");
+    const cityInput = document.getElementById("city-input");
+    const postalCodeInput = document.getElementById("postal-code-input");
+    const panel = document.querySelector(".panel");
+    const results = document.getElementById("results");
+    const validationForm = document.getElementById("validation-form");
+    const validationButton = document.getElementById("validate-button");
+    const validationResult = document.getElementById("validation-result");
+    const apiBaseUrl = "https://addresswise.eu";
+    const demoApiKey = __DEMO_API_KEY__;
+
+    function escapeHtml(value) {
+      return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    let activeController = null;
+    let pendingTimer = null;
+    let requestSequence = 0;
+    let latestResults = [];
+    let latestResultsAreStreetOnly = false;
+    let validationController = null;
+
+    async function runSearch(query, country, streetOnly) {
+      if (activeController) {
+        activeController.abort();
+      }
+
+      activeController = new AbortController();
+      const params = new URLSearchParams({
+        q: query,
+        country,
+        limit: "50",
+        api_key: demoApiKey,
+      });
+      const streetOnlyFlag = streetOnly ? "&street_only" : "";
+      const response = await fetch(`${apiBaseUrl}/search?${params.toString()}${streetOnlyFlag}`, {
+        method: "GET",
+        cache: "no-store",
+        credentials: "same-origin",
+        signal: activeController.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Search failed with HTTP ${response.status}`);
+      }
+
+      return response.json();
+    }
+
+    function buildHouseNumber(address) {
+      if (address.premise && address.subpremise) {
+        return `${address.premise}/${address.subpremise}`;
+      }
+
+      return address.premise || address.subpremise || "";
+    }
+
+    function buildStreetLine(address) {
+      return [address.thoroughfare, buildHouseNumber(address)]
+        .filter(Boolean)
+        .join(" ");
+    }
+
+    function fillStructuredFields(result) {
+      const address = result.address;
+      streetInput.value = buildStreetLine(address) || address.full_address;
+      cityInput.value = address.locality || address.dependent_locality || "";
+      postalCodeInput.value = address.postal_code || "";
+    }
+
+    function clearStructuredFields() {
+      cityInput.value = "";
+      postalCodeInput.value = "";
+    }
+
+    function focusStreetInputAtEnd() {
+      streetInput.focus();
+      const end = streetInput.value.length;
+      streetInput.setSelectionRange(end, end);
+    }
+
+    function clearSuggestions() {
+      latestResults = [];
+      latestResultsAreStreetOnly = false;
+      results.innerHTML = "";
+      panel.classList.remove("visible");
+    }
+
+    function renderValidationResult(content, kind = "") {
+      validationResult.className = `validation-result visible ${kind}`.trim();
+      validationResult.innerHTML = content;
+    }
+
+    function validationAddressLabel(address) {
+      return escapeHtml(address.full_address || buildStreetLine(address));
+    }
+
+    async function runValidation(payload) {
+      if (validationController) {
+        validationController.abort();
+      }
+      validationController = new AbortController();
+      const params = new URLSearchParams({ api_key: demoApiKey });
+      const response = await fetch(`${apiBaseUrl}/validate?${params.toString()}`, {
+        method: "POST",
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: validationController.signal,
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        throw new Error(body.message || `Validation failed with HTTP ${response.status}`);
+      }
+      return body;
+    }
+
+    function renderResults(payload, streetOnly) {
+      const addressResults = payload.results.filter((result) =>
+        Boolean(buildHouseNumber(result.address)),
+      );
+      const visibleResults = !streetOnly && addressResults.length
+        ? addressResults
+        : payload.results;
+      latestResults = visibleResults;
+      latestResultsAreStreetOnly = streetOnly;
+      if (!visibleResults.length) {
+        panel.classList.remove("visible");
+        results.innerHTML = "";
+        return;
+      }
+
+      panel.classList.add("visible");
+      results.innerHTML = visibleResults
+        .map((result, index) => {
+          const street = buildStreetLine(result.address) || result.address.full_address;
+          const locality = [
+            result.address.locality || result.address.dependent_locality || "",
+            result.address.postal_code || "",
+          ]
+            .filter(Boolean)
+            .join(", ");
+
+          return `<li><button class="suggestion" type="button" data-index="${index}"><strong>${escapeHtml(street)}</strong><span>${escapeHtml(locality || result.address.full_address)}</span></button></li>`;
+        })
+        .join("");
+    }
+
+    async function triggerSearch(query) {
+      const currentRequest = ++requestSequence;
+      const country = countryInput.value;
+      if (!country) {
+        return;
+      }
+      if (!query) {
+        if (activeController) {
+          activeController.abort();
+          activeController = null;
+        }
+        clearSuggestions();
+        clearStructuredFields();
+        return;
+      }
+
+      const streetOnly = !/\d/.test(query);
+
+      try {
+        const payload = await runSearch(query, country, streetOnly);
+        if (currentRequest === requestSequence) {
+          renderResults(payload, streetOnly);
+        }
+      } catch (error) {
+        if (error.name === "AbortError") {
+          return;
+        }
+        if (currentRequest === requestSequence) {
+          clearSuggestions();
+        }
+      }
+    }
+
+    function scheduleSearch() {
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+      }
+
+      pendingTimer = setTimeout(() => {
+        pendingTimer = null;
+        void triggerSearch(streetInput.value.trim());
+      }, 120);
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        pendingTimer = null;
+      }
+      await triggerSearch(streetInput.value.trim());
+    });
+
+    validationForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const formData = new FormData(validationForm);
+      const payload = Object.fromEntries(formData.entries());
+      validationButton.disabled = true;
+      renderValidationResult("Checking this address…");
+      try {
+        const result = await runValidation(payload);
+        const confidence = `${Math.round(result.confidence_ratio * 100)}%`;
+        if (result.valid) {
+          renderValidationResult(`<strong>Valid address.</strong> ${confidence} confidence.`, "valid");
+          return;
+        }
+        const correction = result.corrected_address
+          ? `<br><strong>Closest canonical address:</strong> ${validationAddressLabel(result.corrected_address)}`
+          : "<br>No matching address was found.";
+        const suggestions = result.suggestions.length
+          ? `<ul>${result.suggestions.map((suggestion) => `<li>${validationAddressLabel(suggestion.address)} — ${Math.round(suggestion.confidence_ratio * 100)}%</li>`).join("")}</ul>`
+          : "";
+        renderValidationResult(`<strong>Needs review.</strong> ${confidence} confidence.${correction}${suggestions}`);
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          renderValidationResult(escapeHtml(error.message || "Validation failed."), "error");
+        }
+      } finally {
+        validationButton.disabled = false;
+      }
+    });
+
+    function cancelSearch() {
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        pendingTimer = null;
+      }
+      if (activeController) {
+        activeController.abort();
+        activeController = null;
+      }
+      ++requestSequence;
+      clearSuggestions();
+    }
+
+    streetInput.addEventListener("input", () => {
+      cancelSearch();
+      clearStructuredFields();
+      scheduleSearch();
+    });
+
+    countryInput.addEventListener("change", () => {
+      cancelSearch();
+      streetInput.value = "";
+      streetInput.disabled = !countryInput.value;
+      streetInput.placeholder = countryInput.value ? "Type a street, then add the house number" : "Select a country first";
+      clearStructuredFields();
+      if (countryInput.value) {
+        streetInput.focus();
+      }
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!(event.target instanceof Element)) {
+        return;
+      }
+
+      if (!event.target.closest(".field-street")) {
+        clearSuggestions();
+      }
+    });
+
+    results.addEventListener("click", (event) => {
+      const button = event.target instanceof Element ? event.target.closest(".suggestion") : null;
+      if (!button) {
+        return;
+      }
+
+      const index = Number(button.dataset.index);
+      const result = latestResults[index];
+      if (!result) {
+        return;
+      }
+
+      event.stopPropagation();
+
+      const hasHouseNumber = Boolean(buildHouseNumber(result.address));
+      if (latestResultsAreStreetOnly && !hasHouseNumber) {
+        const selectedStreet = result.address.thoroughfare || result.formatted;
+        streetInput.value = `${selectedStreet} `;
+        clearStructuredFields();
+      } else {
+        fillStructuredFields(result);
+      }
+      clearSuggestions();
+      focusStreetInputAtEnd();
+    });
+
+  </script>
+</body>
+</html>

@@ -190,6 +190,21 @@ screenshots, source, or this file.
 - Free access is issued by the team. Do not imply instant key delivery or online
   payment collection until those flows exist. Keep quota and billing copy exact.
 
+## Languages and terms
+
+- Public pages default to Czech (`cs`), with `?lang=cs|sk|en` and an upper-right
+  CZ/SK/EN selector. A functional `addresswise_language` cookie remembers selection;
+  it never contains credentials. Explicit URL language wins. Invalid language uses cs.
+- English source templates are in `static/*.html`, reviewed CS/SK catalogs in
+  `static/locales/`, generated server-rendered variants in `static/{cs,sk,en}/`.
+  Run `python3 scripts/build_locales.py` after edits, then `scripts/check_locales.py`.
+  Shared runtime UI translations are in `static/i18n.js`; preserve source data and API examples.
+- `/terms` is the separate B2B terms page, version 2026-11-23, in all three languages.
+  Operator confirmed by the user and ARES: Peter Vajda, IČO 23369817, Gen. Svobody
+  174, Arnultovice, 473 01 Nový Bor; contact peter@addresswise.eu. Czech text prevails.
+  Terms become contractual through the confirmed offer/email process; an enquiry
+  or publication alone does not activate payment or establish accepted terms.
+
 ## Shared Companywise platform
 
 - Addresswise owns API keys for both products. Preserve existing address API

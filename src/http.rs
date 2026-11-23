@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use xitca_web::{
     App,
-    handler::{handler_service, html::Html, json::Json, query::Query, state::StateRef},
+    handler::{handler_service, json::Json, query::Query, state::StateRef},
     http::{StatusCode, WebRequest, WebResponse, header::CONTENT_TYPE},
     route::{get, post},
 };
@@ -184,6 +184,11 @@ pub fn serve_with_state(addr: String, state: Arc<AppState>) -> AppResult<()> {
         .at("/addresswise", get(handler_service(home)))
         .at("/account", get(handler_service(crate::platform::account)))
         .at("/docs", get(handler_service(crate::platform::docs)))
+        .at("/terms", get(handler_service(crate::platform::terms)))
+        .at(
+            "/assets/addresswise-i18n.js",
+            get(handler_service(crate::i18n::script)),
+        )
         .at(
             "/account/api/usage",
             get(handler_service(crate::platform::customer_usage)),
@@ -212,14 +217,26 @@ pub fn serve_with_state(addr: String, state: Arc<AppState>) -> AppResult<()> {
     Ok(())
 }
 
-async fn home(StateRef(state): StateRef<'_, Arc<AppState>>) -> Html<String> {
-    let demo_api_key = serde_json::to_string(&state.demo_api_key)
-        .expect("serializing a demo API key must succeed");
-    Html(include_str!("../static/index.html").replace("__DEMO_API_KEY__", &demo_api_key))
+async fn home(
+    StateRef(state): StateRef<'_, Arc<AppState>>,
+    Query(query): Query<crate::i18n::LanguageQuery>,
+    req: &WebRequest<()>,
+) -> WebResponse {
+    let language = crate::i18n::Language::from_request(&query, req);
+    let key = serde_json::to_string(&state.demo_api_key)
+        .expect("public demo key")
+        .replace('<', "\\u003c");
+    crate::i18n::html(
+        crate::i18n::template("index", language).replace("__DEMO_API_KEY__", &key),
+        language,
+    )
 }
-
-async fn admin_home() -> Html<&'static str> {
-    Html(include_str!("../static/admin.html"))
+async fn admin_home(
+    Query(query): Query<crate::i18n::LanguageQuery>,
+    req: &WebRequest<()>,
+) -> WebResponse {
+    let language = crate::i18n::Language::from_request(&query, req);
+    crate::i18n::html(crate::i18n::template("admin", language), language)
 }
 
 async fn admin_list_keys(
@@ -1472,7 +1489,7 @@ mod tests {
             .expect("app service");
 
         let mut req = WebRequest::default();
-        *req.uri_mut() = Uri::from_static("/");
+        *req.uri_mut() = Uri::from_static("/?lang=en");
 
         let resp = service.call(req).await.expect("response");
         assert_eq!(resp.status(), StatusCode::OK);
@@ -1528,7 +1545,7 @@ mod tests {
             .expect("app service");
 
         let mut req = WebRequest::default();
-        *req.uri_mut() = Uri::from_static("/admin");
+        *req.uri_mut() = Uri::from_static("/admin?lang=en");
         let body = collect_string_body(service.call(req).await.expect("response").into_body())
             .await
             .expect("body");

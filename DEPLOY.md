@@ -302,3 +302,30 @@ Design references: [clear product explanations](https://www.nngroup.com/articles
 [effective developer documentation](https://engineering.homeoffice.gov.uk/patterns/write-effective-documentation/).
 The public guide leads with a first request, with reference and billing details
 kept in named sections. All snippets use the existing production API contracts.
+
+## Czech default, translations and B2B terms (2026-11-23)
+
+Build translations with `python3 scripts/build_locales.py` and validate them with
+`python3 scripts/check_locales.py` before the normal Rust checks/release build.
+`/terms?lang=cs|sk|en` contains the same version of the business terms in each
+language. API schemas, source records, query parameters and credit charges are
+unchanged. UI responses include Content-Language and private revalidation with
+Vary: Cookie. Companywise uses the same CZ/SK/EN choice and Czech default.
+
+Terms research: the published Smartform terms dated 2025-02-04 were retrieved
+and extracted for topic research; no competitor document is redistributed or
+used as our text. [Smartform terms](https://www.smartform.cz/frontend/doc/podminky/smartform_obchodni_podminky_20250204.pdf)
+cover a very close address/company API service. [Merk terms](https://imper.cz/wp-content/uploads/2023/09/210929_VOP-Merk.pdf)
+were a second B2B data-service reference. Our clauses were written for our actual
+chosen-package/hard-limit/manual-payment model and preserve mandatory liability
+protections. [Czech Civil Code](https://e-sbirka.gov.cz/sb/2012/89) is the legal
+framework. The terms are an original operational draft, not a legal opinion.
+
+[Official ARES record](https://ares.gov.cz/ekonomicke-subjekty-v-be/rest/ekonomicke-subjekty/23369817)
+confirmed Peter Vajda and the registered office; the user explicitly confirmed
+IČO 23369817, peter@addresswise.eu, and business/self-employed customers only.
+The original seven-digit number was corrected before publication. A null ARES
+DIČ was not treated as proof of VAT status; tax treatment and the final amount
+are confirmed in the offer. Do not automatically bind existing customers to a
+new terms version: retain their accepted offer/terms version in the manual
+contract records. The access enquiry is not a binding paid order.
