@@ -47,6 +47,7 @@ def verify(base):
     owner = None
     try:
         payload = {'name': 'Account verification temporary', 'email': email,
+                   'business_address': 'Custom business address\n110 00 Praha\nČesko',
                    'password': password, 'domain': 'MyDomain.COM', 'plan': 'growth',
                    'business': True, 'accept_terms': True, 'terms_version': '2026-11-23-accounts',
                    'language': 'cs'}
@@ -62,6 +63,8 @@ def verify(base):
         check(status == 200 and headers['Cache-Control'] == 'no-store', 'Account profile failed')
         key_id, owner = profile['api_key_id'], profile['customer']['id']
         check(isinstance(key_id, int) and isinstance(owner, int), 'Account did not provision a key')
+        check(profile['customer']['business_address'] == payload['business_address'],
+              'The submitted business address was not saved')
         csrf = profile['csrf_token']
         subscription = profile['subscription']
         check(subscription['active_plan'] == 'free' and subscription['selected_plan'] == 'growth'
@@ -111,6 +114,7 @@ def verify(base):
               'Login did not restore the same owned key')
         # A second customer cannot access the first customer's key or change their plan.
         second = {**payload, 'email': 'second-' + email, 'plan': 'free'}
+        del second['business_address']
         status, _, headers = call('/account/api/register', second)
         check(status == 201, 'Free registration failed')
         other_cookie = headers['Set-Cookie'].split(';')[0]
@@ -118,6 +122,8 @@ def verify(base):
         other_id, other_key = other_profile['customer']['id'], other_profile['api_key_id']
         check(isinstance(other_id, int) and isinstance(other_key, int), 'Unexpected temporary IDs')
         try:
+            check(other_profile['customer']['business_address'] is None,
+                  'Registration without an address should still work')
             check(other_profile['api_key'] != key and other_profile['credits']['used_credits'] == 0,
                   'Customer isolation failed')
             check(call('/account/api/subscription', {'plan': 'growth'}, cookie=other_cookie, csrf=csrf)[0] == 403,

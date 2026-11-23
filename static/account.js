@@ -41,6 +41,8 @@
     const pending = selected !== 'free' && selected !== active;
     const cancelling = Boolean(subscription.cancel_at);
     element('customer-identity').textContent = customer.name + ' · ' + customer.email;
+    element('customer-address').textContent = customer.business_address || '';
+    element('customer-address').hidden = !customer.business_address;
     element('customer-domain').textContent = customer.domain;
     element('active-plan').textContent = translate(names[active]);
     element('selected-plan').textContent = translate(names[selected]);
@@ -90,7 +92,99 @@
     element('customer-dashboard').scrollIntoView();
   }
 
+  const registration = element('register-form');
+  const companyCountry = element('registration-company-country');
+  const ico = element('registration-ico');
+  const lookupButton = element('registration-company-lookup');
+  const lookupStatus = element('registration-lookup-status');
+  const companyName = registration.elements.name;
+  const businessAddress = registration.elements.business_address;
+  let lookup;
+  let lastRegistryAddress = '';
+  companyCountry.value = language === 'sk' ? 'SK' : 'CZ';
+
+  function resetLookup() {
+    lookup?.abort();
+    lookup = undefined;
+    lookupButton.disabled = false;
+    lookupStatus.textContent = '';
+  }
+
+  function formatRegistryAddress(address) {
+    const numbers = [address.reg_number, address.building_number]
+      .filter(number => number && number !== '0');
+    const street = [address.street, numbers.join('/')].filter(Boolean).join(' ');
+    const locality = [address.postal_codes?.[0], address.municipality || address.city]
+      .filter(Boolean).join(' ');
+    return street || locality ? [street, locality, address.country].filter(Boolean).join('\n') : '';
+  }
+
+  async function lookupCompany() {
+    resetLookup();
+    const id = ico.value.trim();
+    if (!/^[0-9]{8}$/.test(id)) {
+      lookupStatus.textContent = translate('Enter an 8-digit IČO.');
+      ico.focus();
+      return;
+    }
+    const controller = new AbortController();
+    lookup = controller;
+    const timeout = setTimeout(() => controller.abort(), 90000);
+    const originalName = companyName.value;
+    const originalAddress = businessAddress.value;
+    lookupButton.disabled = true;
+    lookupStatus.textContent = translate('Checking company…');
+    try {
+      const endpoint = '/companywise/api/v1/subjects/' + companyCountry.value + '/' + id + '?minimal=true';
+      const result = await fetch(endpoint, {signal: controller.signal, cache: 'no-store'});
+      if (lookup !== controller) return;
+      const unavailable = 'Company lookup is unavailable. You can enter your details manually.';
+      if (!result.ok && result.status !== 404) throw new Error(unavailable);
+      const data = result.ok ? await result.json() : {};
+      if (lookup !== controller) return;
+      const records = Array.isArray(data.records) ? data.records : [];
+      const record = records.find(entry => entry.name?.trim() && entry.name.length <= companyName.maxLength);
+      if (!record) {
+        lookupStatus.textContent = translate('No company found. You can enter your details manually.');
+        return;
+      }
+      const address = (record.addresses || []).map(formatRegistryAddress)
+        .find(value => value && value.length <= businessAddress.maxLength);
+      if (companyName.value === originalName) companyName.value = record.name.trim();
+      if (businessAddress.value === originalAddress) {
+        if (address || (lastRegistryAddress && originalAddress === lastRegistryAddress)) {
+          businessAddress.value = address || '';
+          lastRegistryAddress = businessAddress.value;
+        }
+      }
+      lookupStatus.textContent = translate(address
+        ? 'Companywise just did the typing. You can still edit the name and address.'
+        : 'Companywise found the name. You can add the address yourself.');
+    } catch {
+      if (lookup === controller) {
+        lookupStatus.textContent = translate('Company lookup is unavailable. You can enter your details manually.');
+      }
+    } finally {
+      clearTimeout(timeout);
+      if (lookup === controller) {
+        lookup = undefined;
+        lookupButton.disabled = false;
+      }
+    }
+  }
+
+  ico.addEventListener('input', resetLookup);
+  companyCountry.addEventListener('change', resetLookup);
+  lookupButton.addEventListener('click', lookupCompany);
+  ico.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (!lookupButton.disabled) lookupCompany();
+    }
+  });
+
   form('register-form', async data => {
+    resetLookup();
     await api('register', {...data, business: data.business === 'on', accept_terms: data.terms === 'on',
       terms_version: '2026-11-23-accounts', language});
     await load();

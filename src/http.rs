@@ -214,6 +214,10 @@ pub fn serve_with_state(addr: String, state: Arc<AppState>) -> AppResult<()> {
             get(handler_service(crate::i18n::account_script)),
         )
         .at("/health", get(handler_service(health)))
+        .at(
+            "/assets/references/{logo}",
+            get(handler_service(crate::platform::reference_logo)),
+        )
         .at("/addresswise", get(handler_service(home)))
         .at("/account", get(handler_service(crate::platform::account)))
         .at("/docs", get(handler_service(crate::platform::docs)))

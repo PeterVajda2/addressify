@@ -332,8 +332,8 @@ contract records. The access enquiry is not a binding paid order.
 
 ## Customer accounts
 
-Apply 0006 before starting this binary. `deploy/rollout-accounts.sh` applies
-the additive migration and exercises a temporary customer account before and
+Apply migrations 0006 and 0007 before starting this binary. `deploy/rollout-accounts.sh` applies
+the additive migrations and exercises a temporary customer account before and
 after cutover. It preserves existing credentials and their usage history.
 Registration provisions a Free key and records the selected plan and accepted
 terms version. The account can display the key, review credits, update the

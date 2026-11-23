@@ -36,6 +36,28 @@ pub async fn landing(
         language,
     )
 }
+
+pub async fn reference_logo(req: &WebRequest<()>) -> WebResponse {
+    let image: &[u8] = match req.uri().path() {
+        "/assets/references/showdown-displays.png" => {
+            include_bytes!("../static/references/showdown-displays.png")
+        }
+        "/assets/references/jansen-display.png" => {
+            include_bytes!("../static/references/jansen-display.png")
+        }
+        _ => return failure(StatusCode::NOT_FOUND, "not_found", "Image not found"),
+    };
+    let mut response = WebResponse::new(image.to_vec().into());
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("image/png"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("public, max-age=86400"),
+    );
+    response
+}
 pub async fn account(
     Query(query): Query<crate::i18n::LanguageQuery>,
     req: &WebRequest<()>,
@@ -262,7 +284,8 @@ fn browser_demo(req: &WebRequest<()>) -> bool {
         .is_some_and(|url| {
             url.scheme() == "https"
                 && url.host_str() == Some("addresswise.eu")
-                && (url.path().starts_with("/companywise/") || url.path() == "/")
+                && (url.path().starts_with("/companywise/")
+                    || matches!(url.path(), "/" | "/account"))
         })
 }
 
@@ -454,6 +477,8 @@ mod tests {
         for (referer, allowed) in [
             ("https://addresswise.eu/companywise/", true),
             ("https://addresswise.eu/companywise/docs/", true),
+            ("https://addresswise.eu/account?lang=sk&plan=free", true),
+            ("https://addresswise.eu/account/api/me", false),
             ("https://addresswise.eu.evil.test/companywise/", false),
             ("https://evil.test/companywise/", false),
             ("http://addresswise.eu/companywise/", false),

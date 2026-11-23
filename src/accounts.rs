@@ -251,6 +251,8 @@ async fn identity(
 #[derive(Deserialize)]
 pub struct RegisterRequest {
     name: String,
+    #[serde(default)]
+    business_address: String,
     email: String,
     password: String,
     domain: String,
@@ -319,6 +321,15 @@ pub async fn register(
             "Enter your business name, a password of at least 12 characters, and accept the business terms.",
         );
     }
+    let business_address = request.business_address.trim();
+    if business_address.chars().count() > 500 || business_address.contains('\0') {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "invalid_business_address",
+            "Enter a business address of at most 500 characters.",
+        );
+    }
+    let business_address = Some(business_address).filter(|address| !address.is_empty());
     if request.terms_version != TERMS_VERSION {
         return error(
             StatusCode::CONFLICT,
@@ -344,8 +355,8 @@ pub async fn register(
     let key = crate::http::generate_api_key();
     let result:Result<(),sqlx::Error>=async {
         let mut tx=pool.begin().await?;
-        let owner=sqlx::query_scalar::<_,i64>("INSERT INTO customer_accounts(email,name,password_hash,domain,requested_plan,terms_version,terms_language) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id")
-            .bind(email).bind(request.name.trim()).bind(hash).bind(&domain).bind(request.plan).bind(TERMS_VERSION).bind(request.language).fetch_one(&mut *tx).await?;
+        let owner=sqlx::query_scalar::<_,i64>("INSERT INTO customer_accounts(email,name,password_hash,domain,requested_plan,terms_version,terms_language,business_address) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id")
+            .bind(email).bind(request.name.trim()).bind(hash).bind(&domain).bind(request.plan).bind(TERMS_VERSION).bind(request.language).bind(business_address).fetch_one(&mut *tx).await?;
         let key_id=sqlx::query_scalar::<_,i64>("INSERT INTO api_keys(api_key,label,billing_plan) VALUES($1,$2,'free') RETURNING id")
             .bind(key).bind(format!("{} · {}",request.name.trim(),domain)).fetch_one(&mut *tx).await?;
         sqlx::query("INSERT INTO api_key_domains(api_key_id,domain) VALUES($1,$2)").bind(key_id).bind(domain).execute(&mut *tx).await?;
@@ -543,7 +554,7 @@ async fn profile(
     } else {
         None
     };
-    let row=sqlx::query("SELECT a.id,a.name,a.email,a.domain,a.requested_plan,a.terms_version,
+    let row=sqlx::query("SELECT a.id,a.name,a.email,a.domain,a.requested_plan,a.terms_version,a.business_address,
       to_char(a.cancel_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS cancel_at,
       k.id AS key_id,k.api_key,k.is_active,k.billing_plan,
       to_char((date_trunc('month',now() AT TIME ZONE 'UTC')+interval '1 month'),'YYYY-MM-DD')||'T00:00:00Z' AS period_end
@@ -564,7 +575,7 @@ async fn profile(
         "free"
     };
     Ok(
-        serde_json::json!({"customer":{"id":row.get::<i64,_>("id"),"name":row.get::<String,_>("name"),"email":row.get::<String,_>("email"),"domain":row.get::<String,_>("domain")},
+        serde_json::json!({"customer":{"id":row.get::<i64,_>("id"),"name":row.get::<String,_>("name"),"email":row.get::<String,_>("email"),"domain":row.get::<String,_>("domain"),"business_address":row.get::<Option<String>,_>("business_address")},
       "api_key":row.get::<Option<String>,_>("api_key"),"api_key_id":row.get::<Option<i64>,_>("key_id"),"key_active":row.get::<Option<bool>,_>("is_active").unwrap_or(false),
       "subscription":{"active_plan":active,"selected_plan":requested,"status":status,"cancel_at":cancel,"period_end":row.get::<String,_>("period_end"),"payment_provider":"gopay","payments_enabled":false},"credits":credits,"csrf_token":csrf,"terms_version":row.get::<String,_>("terms_version")}),
     )

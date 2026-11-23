@@ -625,5 +625,16 @@
   "Account service is temporarily unavailable. Please retry later.": "Účet je dočasne nedostupný. Skúste to neskôr.",
   "Enter a valid email address.": "Zadajte platný e-mail.",
   "Enter your business name, a password of at least 12 characters, and accept the business terms.": "Zadajte názov firmy a heslo aspoň s 12 znakmi a prijmite obchodné podmienky.",
-  "the browser supplies your Origin automatically. Register your website domain with your key. Its subdomains are included automatically. For cURL or a server-side address search, supply an allowed Origin explicitly. Browser keys are visible to visitors; keep private server keys on your server.": "prehliadač posiela Origin automaticky. Zaregistrujte skutočnú doménu webu pri svojom kľúči. Zahŕňa automaticky aj subdomény. V cURL alebo pri hľadaní zo servera pošlite povolený Origin výslovne. Kľúče použité v prehliadači sú viditeľné návštevníkom; súkromné serverové kľúče uchovávajte na serveri."
+  "the browser supplies your Origin automatically. Register your website domain with your key. Its subdomains are included automatically. For cURL or a server-side address search, supply an allowed Origin explicitly. Browser keys are visible to visitors; keep private server keys on your server.": "prehliadač posiela Origin automaticky. Zaregistrujte skutočnú doménu webu pri svojom kľúči. Zahŕňa automaticky aj subdomény. V cURL alebo pri hľadaní zo servera pošlite povolený Origin výslovne. Kľúče použité v prehliadači sú viditeľné návštevníkom; súkromné serverové kľúče uchovávajte na serveri.",
+  "References": "Referencie",
+  "Company lookup by IČO (optional)": "Vyhľadanie firmy podľa IČO (voliteľné)",
+  "Fill from register": "Doplniť z registra",
+  "Business address (optional)": "Firemná adresa (voliteľná)",
+  "You can use a different address. Include the city, postal code and country.": "Môžete použiť inú adresu. Uveďte obec, PSČ a štát.",
+  "Enter an 8-digit IČO.": "Zadajte osemmiestne IČO.",
+  "No company found. You can enter your details manually.": "Firmu sa nepodarilo nájsť. Údaje môžete vyplniť ručne.",
+  "Company lookup is unavailable. You can enter your details manually.": "Vyhľadávanie firiem teraz nie je dostupné. Údaje môžete vyplniť ručne.",
+  "Companywise just did the typing. You can still edit the name and address.": "Companywise sa práve zahral na pisára. Názov aj adresu môžete upraviť.",
+  "Companywise found the name. You can add the address yourself.": "Companywise našiel názov. Adresu môžete doplniť ručne.",
+  "Enter a business address of at most 500 characters.": "Zadajte firemnú adresu s dĺžkou najviac 500 znakov."
 }
