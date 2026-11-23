@@ -1,7 +1,8 @@
 use std::{env, fs, sync::LazyLock, time::Duration};
 
 use lettre::{
-    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor, message::Mailbox,
+    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
+    message::{Mailbox, MultiPart},
     transport::smtp::authentication::Credentials,
 };
 use sqlx::{PgPool, Postgres, Transaction};
@@ -139,51 +140,8 @@ pub(super) fn send(
     let Some(mailer) = MAILER.as_ref() else {
         return;
     };
-    let link = format!(
-        "https://addresswise.eu/account?lang={language}#{}={token}",
-        purpose.link_action()
-    );
-    let (subject, instruction, expiry) = match (language.as_str(), purpose) {
-        ("cs", Purpose::Confirm) => (
-            "Potvrďte registraci v Addresswise",
-            "Registraci dokončíte otevřením odkazu a zadáním hesla z registrace.",
-            "Odkaz platí 24 hodin. Pokud jste se neregistrovali, zprávu můžete ignorovat.",
-        ),
-        ("sk", Purpose::Confirm) => (
-            "Potvrďte registráciu v Addresswise",
-            "Registráciu dokončíte otvorením odkazu a zadaním hesla z registrácie.",
-            "Odkaz platí 24 hodín. Ak ste sa neregistrovali, správu môžete ignorovať.",
-        ),
-        (_, Purpose::Confirm) => (
-            "Confirm your Addresswise registration",
-            "Open the link and enter the password you chose to complete registration.",
-            "This link expires in 24 hours. If you did not register, you can ignore this email.",
-        ),
-        ("cs", Purpose::Reset) => (
-            "Obnovte heslo v Addresswise",
-            "Otevřete odkaz a nastavte si nové heslo.",
-            "Odkaz platí 30 minut. Pokud jste o změnu nežádali, zprávu můžete ignorovat.",
-        ),
-        ("sk", Purpose::Reset) => (
-            "Obnovte heslo v Addresswise",
-            "Otvorte odkaz a nastavte si nové heslo.",
-            "Odkaz platí 30 minút. Ak ste o zmenu nežiadali, správu môžete ignorovať.",
-        ),
-        (_, Purpose::Reset) => (
-            "Reset your Addresswise password",
-            "Open the link to set a new password.",
-            "This link expires in 30 minutes. If you did not request it, you can ignore this email.",
-        ),
-    };
     let Ok(to) = recipient.parse() else { return };
-    let Ok(message) = Message::builder()
-        .from(mailer.from.clone())
-        .to(to)
-        .subject(subject)
-        .body(format!(
-            "{instruction}\n\n{link}\n\n{expiry}\n\nAddresswise\n"
-        ))
-    else {
+    let Some(message) = account_message(mailer.from.clone(), to, &language, purpose, &token) else {
         return;
     };
     tokio::spawn(async move {
@@ -208,4 +166,143 @@ pub(super) fn send(
             .execute(&pool)
             .await;
     });
+}
+
+struct EmailCopy {
+    subject: &'static str,
+    heading: &'static str,
+    instruction: &'static str,
+    button: &'static str,
+    expiry: &'static str,
+    unsolicited: &'static str,
+}
+
+fn account_message(
+    from: Mailbox,
+    to: Mailbox,
+    language: &str,
+    purpose: Purpose,
+    token: &str,
+) -> Option<Message> {
+    if !valid_token(token) {
+        return None;
+    }
+    let language = match language {
+        "cs" => "cs",
+        "sk" => "sk",
+        _ => "en",
+    };
+    let link = format!(
+        "https://addresswise.eu/account?lang={language}#{}={token}",
+        purpose.link_action()
+    );
+    let copy = email_copy(language, purpose);
+    let plain = format!(
+        "{heading}\n\n{instruction}\n\n{button}:\n{link}\n\n{expiry}\n{unsolicited}\n\nAddresswise\npeter@addresswise.eu\n",
+        heading = copy.heading,
+        instruction = copy.instruction,
+        button = copy.button,
+        expiry = copy.expiry,
+        unsolicited = copy.unsolicited,
+    );
+    // The link contains only a fixed host, a supported locale and a URL-safe token.
+    let html = format!(
+        include_str!("../../static/email/account-action.html"),
+        language = language,
+        heading = copy.heading,
+        instruction = copy.instruction,
+        button = copy.button,
+        expiry = copy.expiry,
+        unsolicited = copy.unsolicited,
+        link = link,
+    );
+    Message::builder()
+        .from(from)
+        .to(to)
+        .subject(copy.subject)
+        .multipart(MultiPart::alternative_plain_html(plain, html))
+        .ok()
+}
+
+fn email_copy(language: &str, purpose: Purpose) -> EmailCopy {
+    match (language, purpose) {
+        ("cs", Purpose::Confirm) => EmailCopy {
+            subject: "Potvrďte registraci v Addresswise",
+            heading: "Potvrďte registraci",
+            instruction: "Otevřete odkaz a zadejte heslo z registrace. Poté získáte bezplatný API klíč pro Addresswise a Companywise.",
+            button: "Potvrdit registraci",
+            expiry: "Odkaz platí 24 hodin.",
+            unsolicited: "Pokud jste se neregistrovali, můžete tento e-mail ignorovat.",
+        },
+        ("sk", Purpose::Confirm) => EmailCopy {
+            subject: "Potvrďte registráciu v Addresswise",
+            heading: "Potvrďte registráciu",
+            instruction: "Otvorte odkaz a zadajte heslo z registrácie. Potom získate bezplatný API kľúč pre Addresswise a Companywise.",
+            button: "Potvrdiť registráciu",
+            expiry: "Odkaz platí 24 hodín.",
+            unsolicited: "Ak ste sa neregistrovali, môžete tento e-mail ignorovať.",
+        },
+        (_, Purpose::Confirm) => EmailCopy {
+            subject: "Confirm your Addresswise registration",
+            heading: "Confirm your registration",
+            instruction: "Open the link and enter the password you chose at registration to activate your Free API key for Addresswise and Companywise.",
+            button: "Confirm registration",
+            expiry: "The link expires in 24 hours.",
+            unsolicited: "If you didn’t register, you can ignore this email.",
+        },
+        ("cs", Purpose::Reset) => EmailCopy {
+            subject: "Obnovte heslo v Addresswise",
+            heading: "Nastavte si nové heslo",
+            instruction: "Otevřete odkaz a nastavte nové heslo k účtu Addresswise.",
+            button: "Nastavit nové heslo",
+            expiry: "Odkaz platí 30 minut a lze ho použít jen jednou.",
+            unsolicited: "Pokud jste o změnu nežádali, můžete tento e-mail ignorovat. Vaše heslo zůstane stejné.",
+        },
+        ("sk", Purpose::Reset) => EmailCopy {
+            subject: "Obnovte heslo v Addresswise",
+            heading: "Nastavte si nové heslo",
+            instruction: "Otvorte odkaz a nastavte nové heslo k účtu Addresswise.",
+            button: "Nastaviť nové heslo",
+            expiry: "Odkaz platí 30 minút a môžete ho použiť iba raz.",
+            unsolicited: "Ak ste o zmenu nežiadali, môžete tento e-mail ignorovať. Vaše heslo zostane rovnaké.",
+        },
+        (_, Purpose::Reset) => EmailCopy {
+            subject: "Reset your Addresswise password",
+            heading: "Set a new password",
+            instruction: "Open the link to set a new password for your Addresswise account.",
+            button: "Set a new password",
+            expiry: "The link expires in 30 minutes and works once.",
+            unsolicited: "If you didn’t request a reset, you can ignore this email. Your password will stay the same.",
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_email_includes_both_formats_and_a_localized_action_link() {
+        let from: Mailbox = "peter@addresswise.eu".parse().unwrap();
+        let to: Mailbox = "test@example.invalid".parse().unwrap();
+        let token = "A".repeat(43);
+        for language in ["cs", "sk", "en"] {
+            for purpose in [Purpose::Confirm, Purpose::Reset] {
+                let message = account_message(from.clone(), to.clone(), language, purpose, &token)
+                    .expect("account email");
+                let wire = String::from_utf8(message.formatted()).unwrap();
+                assert!(wire.contains("multipart/alternative"));
+                assert!(wire.contains("text/plain"));
+                assert!(wire.contains("text/html"));
+                // The HTML part may use quoted-printable line folding.
+                let unfolded = wire.replace("=\r\n", "").replace("=3D", "=");
+                let link = format!(
+                    "https://addresswise.eu/account?lang={language}#{}={token}",
+                    purpose.link_action()
+                );
+                assert_eq!(unfolded.matches(&link).count(), 2);
+            }
+        }
+        assert!(account_message(from, to, "cs", Purpose::Confirm, "invalid").is_none());
+    }
 }
