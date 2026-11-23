@@ -2,7 +2,7 @@
 //! independent. Paid choices are requests, never proof of payment.
 use crate::{
     http::{AppState, json_response},
-    platform::billing_month,
+    platform::{billing_month, key_id, usage_days},
 };
 use argon2::{
     Argon2,
@@ -624,6 +624,59 @@ pub async fn me(
         Err(e) => database(e),
     }
 }
+
+#[derive(Deserialize)]
+pub struct KeyUsageRequest {
+    api_key: String,
+    month: String,
+}
+
+pub async fn inspect_key(
+    StateRef(state): StateRef<'_, Arc<AppState>>,
+    Json(request): Json<KeyUsageRequest>,
+    req: &WebRequest<()>,
+) -> WebResponse {
+    let Some(pool) = state.auth.pool() else {
+        return unavailable();
+    };
+    if let Err(response) = identity(pool, req, true).await {
+        return *response;
+    }
+    let month = match billing_month(Some(&request.month)) {
+        Ok(month) => month,
+        Err(()) => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "invalid_month",
+                "Use month=YYYY-MM",
+            );
+        }
+    };
+    let key = request.api_key.trim();
+    let id = match key_id(pool, key).await {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return error(
+                StatusCode::UNAUTHORIZED,
+                "invalid_api_key",
+                "API key is invalid or inactive",
+            );
+        }
+        Err(err) => return database(err),
+    };
+    let result = tokio::try_join!(
+        crate::billing::report(pool, id, month.as_deref(), key == state.demo_api_key),
+        usage_days(pool, Some(id), month.as_deref()),
+    );
+    match result {
+        Ok((credits, usage)) => response(
+            StatusCode::OK,
+            serde_json::json!({"credits":credits,"usage":usage}),
+        ),
+        Err(err) => database(err),
+    }
+}
+
 async fn profile(
     pool: &PgPool,
     owner: i64,

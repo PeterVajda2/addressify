@@ -194,6 +194,10 @@ pub fn serve_with_state(addr: String, state: Arc<AppState>) -> AppResult<()> {
         )
         .at("/account/api/me", get(handler_service(crate::accounts::me)))
         .at(
+            "/account/api/key-usage",
+            post(handler_service(crate::accounts::inspect_key)),
+        )
+        .at(
             "/account/api/domains",
             post(handler_service(crate::accounts::change_domain)),
         )

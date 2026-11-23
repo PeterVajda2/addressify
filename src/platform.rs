@@ -308,7 +308,7 @@ fn upstream_query(raw: &str) -> Vec<(String, String)> {
 }
 
 #[derive(Serialize)]
-struct UsageDay {
+pub(crate) struct UsageDay {
     api_key_id: i64,
     label: Option<String>,
     product: String,
@@ -362,23 +362,8 @@ async fn usage(pool: &PgPool, id: Option<i64>, month: Option<&str>) -> WebRespon
             );
         }
     };
-    match sqlx::query(USAGE_SQL)
-        .bind(id)
-        .bind(month)
-        .fetch_all(pool)
-        .await
-    {
-        Ok(rows) => {
-            let days = rows
-                .into_iter()
-                .map(|row| UsageDay {
-                    api_key_id: row.get("api_key_id"),
-                    label: row.get("label"),
-                    product: row.get("product"),
-                    date: row.get("date"),
-                    requests: row.get("requests"),
-                })
-                .collect::<Vec<_>>();
+    match usage_days(pool, id, month.as_deref()).await {
+        Ok(days) => {
             let mut response = json_ok(days);
             response.headers_mut().insert(
                 header::CACHE_CONTROL,
@@ -392,6 +377,27 @@ async fn usage(pool: &PgPool, id: Option<i64>, month: Option<&str>) -> WebRespon
             "Usage reporting is temporarily unavailable",
         ),
     }
+}
+
+pub(crate) async fn usage_days(
+    pool: &PgPool,
+    id: Option<i64>,
+    month: Option<&str>,
+) -> Result<Vec<UsageDay>, sqlx::Error> {
+    Ok(sqlx::query(USAGE_SQL)
+        .bind(id)
+        .bind(month)
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|row| UsageDay {
+            api_key_id: row.get("api_key_id"),
+            label: row.get("label"),
+            product: row.get("product"),
+            date: row.get("date"),
+            requests: row.get("requests"),
+        })
+        .collect())
 }
 
 pub async fn customer_usage(

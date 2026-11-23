@@ -79,6 +79,18 @@ def verify(base):
         check(call('/account/api/payment', {}, cookie=cookie, csrf=csrf)[0] == 501,
               'Disabled GoPay endpoint must not accept payment')
         key = profile['api_key']
+        key_check = {'api_key': key, 'month': '2000-01'}
+        check(call('/account/api/key-usage', key_check)[0] == 401,
+              'The dashboard key check must require login even with a valid key')
+        check(call('/account/api/key-usage', key_check, cookie=cookie)[0] == 403,
+              'The dashboard key check must require CSRF protection')
+        status, checked, headers = call('/account/api/key-usage', key_check, cookie=cookie, csrf=csrf)
+        check(status == 200 and headers['Cache-Control'] == 'no-store'
+              and checked['credits']['api_key_id'] == key_id
+              and checked['credits']['month'] == '2000-01' and checked['usage'] == [],
+              'Signed-in key check returned the wrong report')
+        check(call('/account/api/key-usage', {**key_check, 'api_key': 'invalid'},
+                   cookie=cookie, csrf=csrf)[0] == 401, 'Signed-in key check accepted an invalid key')
         q = urlencode({'q': 'Hlavna', 'country': 'SK', 'api_key': key, 'limit': 1})
         search = '/search?' + q
         check(call(search, origin='https://mydomain.com')[0] == 200, 'Parent domain rejected')

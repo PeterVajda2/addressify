@@ -9,9 +9,17 @@
   const domainForm = element('domain-form');
   const domainList = element('domain-list');
   const domainStatus = element('domain-status');
+  const usageForm = element('usage-form');
+  const inspectionKey = element('api-key');
+  const inspectionMonth = element('month');
+  const inspectionStatus = element('message');
+  const inspectionButton = element('load');
+  const clearKey = element('disconnect');
   const billingDate = new Intl.DateTimeFormat(language, {dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC'});
   let profile;
   let domainBusy = false;
+  let inspectionSequence = 0;
+  inspectionMonth.value = new Date().toISOString().slice(0, 7);
 
   async function api(path, body, authenticated = false) {
     const options = {cache: 'no-store'};
@@ -32,16 +40,13 @@
     const signedIn = Boolean(profile);
     element('account-entry').hidden = signedIn;
     element('customer-dashboard').hidden = !signedIn;
-    element('legacy-account').hidden = signedIn;
-    element('credit-usage').hidden = true;
-    element('raw-history').hidden = true;
-    element('api-key').value = '';
+    resetInspection();
     element('customer-key').value = profile?.api_key || '';
     element('customer-key').type = 'password';
     element('show-key').textContent = translate('Show key');
     renderDomains();
     if (!profile) return;
-    const {customer, subscription, credits} = profile;
+    const {customer, subscription} = profile;
     const active = subscription.active_plan;
     const selected = subscription.selected_plan;
     const pending = selected !== 'free' && selected !== active;
@@ -59,8 +64,76 @@
     element('key-controls').hidden = !profile.api_key;
     element('customer-key-status').textContent = !profile.api_key ? 'API key unavailable. Contact support.' :
       !profile.key_active ? 'API key disabled. Contact support.' : '';
-    if (credits) renderCredits(credits);
   }
+
+  function resetInspection() {
+    inspectionSequence++;
+    inspectionKey.value = '';
+    inspectionStatus.textContent = '';
+    inspectionStatus.classList.remove('error');
+    inspectionButton.disabled = false;
+    clearKey.hidden = true;
+    showOwnUsage();
+  }
+
+  function showOwnUsage() {
+    element('credit-usage').hidden = true;
+    element('raw-history').hidden = true;
+    element('raw-history').open = false;
+    element('usage').hidden = true;
+    element('usage-rows').replaceChildren();
+    element('credit-heading').textContent = translate('Your chosen package');
+    if (profile?.credits) renderCredits(profile.credits);
+  }
+
+  usageForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!profile) return;
+    const current = ++inspectionSequence;
+    inspectionButton.disabled = true;
+    showOwnUsage();
+    inspectionStatus.classList.remove('error');
+    inspectionStatus.textContent = translate('Loading usage…');
+    try {
+      const {credits, usage} = await api('key-usage', {
+        api_key: inspectionKey.value.trim(),
+        month: inspectionMonth.value,
+      }, true);
+      if (current !== inspectionSequence) return;
+      renderCredits(credits);
+      element('credit-heading').textContent = translate('Usage for checked key');
+      const totals = {addresswise: 0, companywise: 0};
+      const rows = usage.map(row => {
+        totals[row.product] += row.requests;
+        const tr = document.createElement('tr');
+        for (const value of [row.date, row.product === 'addresswise' ? 'Addresswise' : 'Companywise', row.requests.toLocaleString(language)]) {
+          const td = document.createElement('td');
+          td.textContent = value;
+          tr.append(td);
+        }
+        return tr;
+      });
+      element('usage-rows').replaceChildren(...rows);
+      element('address-total').textContent = totals.addresswise.toLocaleString(language);
+      element('company-total').textContent = totals.companywise.toLocaleString(language);
+      element('usage').hidden = false;
+      element('raw-history').hidden = false;
+      clearKey.hidden = false;
+      inspectionStatus.textContent = translate(usage.length ? 'Usage loaded.' : 'No requests recorded for this month.');
+    } catch (error) {
+      if (current !== inspectionSequence) return;
+      inspectionStatus.classList.add('error');
+      inspectionStatus.textContent = translate(error.message);
+    } finally {
+      if (current === inspectionSequence) inspectionButton.disabled = false;
+    }
+  });
+
+  clearKey.addEventListener('click', () => {
+    resetInspection();
+    inspectionStatus.textContent = translate('Key cleared.');
+    inspectionKey.focus();
+  });
 
   function renderDomains() {
     element('domain-controls').hidden = !profile?.api_key;
@@ -121,18 +194,18 @@
     render();
   }
 
-  function form(id, handler) {
+  function form(id, handler, feedback = status) {
     const form = element(id);
     const button = form.querySelector('button[type=submit]');
     form.addEventListener('submit', async event => {
       event.preventDefault();
       button.disabled = true;
-      status.textContent = '';
+      feedback.textContent = '';
       try {
         await handler(Object.fromEntries(new FormData(form)));
         for (const field of form.querySelectorAll('input[type=password]')) field.value = '';
       } catch (error) {
-        status.textContent = translate(error.message || 'Unable to complete the request. Try again.');
+        feedback.textContent = translate(error.message || 'Unable to complete the request. Try again.');
       } finally {
         button.disabled = false;
       }
@@ -320,7 +393,7 @@
     await api('login', data);
     await load();
     openAccount();
-  });
+  }, element('login-status'));
   form('upgrade-form', async data => {
     await api('subscription', data, true);
     await load();
