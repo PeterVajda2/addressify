@@ -636,5 +636,10 @@
   "Company lookup is unavailable. You can enter your details manually.": "Vyhledávání firem teď není dostupné. Údaje můžete vyplnit ručně.",
   "Companywise just did the typing. You can still edit the name and address.": "Companywise si právě zahrál na písaře. Název i adresu můžete upravit.",
   "Companywise found the name. You can add the address yourself.": "Companywise našel název. Adresu můžete doplnit ručně.",
-  "Enter a business address of at most 500 characters.": "Zadejte firemní adresu o délce nejvýše 500 znaků."
+  "Enter a business address of at most 500 characters.": "Zadejte firemní adresu o délce nejvýše 500 znaků.",
+  "Find a different address with Addresswise": "Najít jinou adresu pomocí Addresswise",
+  "Street and house number": "Ulice a číslo domu",
+  "Select an address.": "Vyberte adresu.",
+  "Addresswise did the legwork. You can still edit the address.": "Addresswise oběhal adresu za vás. Klidně ji ještě upravte.",
+  "Address search is unavailable. You can enter the address manually.": "Vyhledávání adres teď není dostupné. Adresu můžete zadat ručně."
 }

@@ -10,6 +10,10 @@
 .registration-lookup .demo-row label{margin:0}.registration-lookup .demo-row input,.registration-lookup .demo-row select{width:100%}
 .registration-lookup .button{margin-top:10px}.registration-lookup p{margin:8px 0 0}
 #register-form textarea{display:block;width:100%;margin-top:5px;padding:9px 10px;border:1px solid #a4b1c3;border-radius:7px;color:var(--ink);resize:vertical}
+#registration-address-helper{margin:0 0 18px}
+#registration-address-helper summary{color:var(--blue);cursor:pointer;font-size:14px}
+#registration-address-helper .demo{margin-bottom:10px}
+#registration-address-results{margin:0}
 #customer-address{white-space:pre-line;overflow-wrap:anywhere}
 </style></head><a class="skip-link" href="#main">Skip to content</a><div class="wrap"><nav class="main-nav" aria-label="Main navigation"><a class="brand" href="/"><span aria-hidden="true">⌖</span>addresswise</a><div class="links"><a href="/#products">Products</a><a href="/#pricing">Pricing</a><a href="/docs">Developers</a><a class="nav-cta" href="/account" aria-current="page">API access &amp; usage</a></div></nav><main id="main"><section class="hero account-hero"><p class="eyebrow">API access &amp; usage</p><h1>One key. Both products.</h1><p class="lede">Start with 1,000 free credits per month. Choose a larger package when you need it. No automatic upgrades or overage fees.</p></section><div class="account-grid" id="account-entry" hidden>
 <section class="account-panel" id="request-access">
@@ -28,6 +32,16 @@
 <label>Name or company<input name="name" required maxlength="200" autocomplete="organization"></label>
 <label>Business address (optional)<textarea name="business_address" rows="3" maxlength="500" autocomplete="street-address" aria-describedby="business-address-hint"></textarea></label>
 <p id="business-address-hint">You can use a different address. Include the city, postal code and country.</p>
+<details id="registration-address-helper" hidden>
+<summary>Find a different address with Addresswise</summary>
+<div class="demo">
+<label>Address country<select id="registration-address-country"></select></label>
+<label>Street and house number<input id="registration-address-query" type="search" maxlength="240" autocomplete="off" aria-controls="registration-address-results" aria-describedby="registration-address-status"></label>
+<p id="registration-address-status" role="status"></p>
+<ul class="demo-suggestions" id="registration-address-results" data-source></ul>
+</div>
+</details>
+<p id="registration-address-note" role="status"></p>
 <label>Contact email<input name="email" type="email" required maxlength="254" autocomplete="email"></label>
 <label>Password<input name="password" type="password" required minlength="12" maxlength="512" autocomplete="new-password"></label>
 <p>Use at least 12 characters.</p>
@@ -92,5 +106,6 @@ disconnect.addEventListener('click',()=>{sequence++;key.value='';usage.hidden=tr
 const byId=id=>document.getElementById(id);const operationNames={autocomplete:'Address autocomplete',validation:'Address validation',company:'Company details'};
 function renderCredits(data){byId('credit-usage').hidden=false;byId('credit-plan').textContent=data.plan.name+' · '+data.plan.credit_limit.toLocaleString()+' credits/month · '+(data.plan.monthly_price_eur===null?'Agreed custom pricing':'€'+data.plan.monthly_price_eur+'/month');byId('credits-used').textContent=data.used_credits.toLocaleString();byId('credits-remaining').textContent=data.is_demo?'Demo key':data.remaining_credits.toLocaleString();byId('credit-pending').textContent=data.reserved_credits?data.reserved_credits.toLocaleString()+' credits are reserved by requests currently in progress.':'';byId('credit-limit-note').textContent=data.is_demo?'This public demo key is separate from customer allowances.':'Hard limit: requests that would exceed this package are blocked with HTTP 429 / credit_limit_exceeded. Reset: '+data.resets_at;byId('credit-history-note').textContent='Credit metering started '+data.metering_started_at+'. Earlier combined request counts are not retroactively converted or charged.';const ops=new Map(data.operations.map(row=>[row.operation,row]));byId('credit-rows').replaceChildren(...Object.entries(operationNames).map(([id,name])=>{const row=ops.get(id)||{requests:0,credits:0};const tr=document.createElement('tr');for(const value of [name,row.requests.toLocaleString(),row.credits.toLocaleString()]){const td=document.createElement('td');td.textContent=value;tr.append(td)}return tr}));}
 /* Registration and signed-in account controls are in account.js. */
+window.AddresswiseRegistrationDemo = {key: __DEMO_API_KEY__, countries: __DEMO_COUNTRIES__};
 const selectedPlan=new URLSearchParams(location.search).get('plan');if(['free','starter','growth','custom'].includes(selectedPlan))byId('request-plan').value=selectedPlan;
 </script><script src="/assets/addresswise-account.js"></script></body></html>

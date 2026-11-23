@@ -20,21 +20,24 @@ pub async fn landing(
     req: &WebRequest<()>,
 ) -> WebResponse {
     let language = crate::i18n::Language::from_request(&query, req);
+    let page = demo_template(crate::i18n::template("platform", language), state);
+    crate::i18n::html(
+        page.replace(
+            "__BILLING_CONFIG__",
+            &crate::billing::public_config().to_string(),
+        ),
+        language,
+    )
+}
+
+fn demo_template(page: &str, state: &AppState) -> String {
     let demo_key = serde_json::to_string(&state.demo_api_key)
         .expect("public demo key")
         .replace('<', "\\u003c");
     let countries =
         serde_json::to_string(&state.indexes.country_codes()).expect("active countries");
-    crate::i18n::html(
-        crate::i18n::template("platform", language)
-            .replace("__DEMO_API_KEY__", &demo_key)
-            .replace("__DEMO_COUNTRIES__", &countries)
-            .replace(
-                "__BILLING_CONFIG__",
-                &crate::billing::public_config().to_string(),
-            ),
-        language,
-    )
+    page.replace("__DEMO_API_KEY__", &demo_key)
+        .replace("__DEMO_COUNTRIES__", &countries)
 }
 
 pub async fn reference_logo(req: &WebRequest<()>) -> WebResponse {
@@ -59,11 +62,15 @@ pub async fn reference_logo(req: &WebRequest<()>) -> WebResponse {
     response
 }
 pub async fn account(
+    StateRef(state): StateRef<'_, Arc<AppState>>,
     Query(query): Query<crate::i18n::LanguageQuery>,
     req: &WebRequest<()>,
 ) -> WebResponse {
     let language = crate::i18n::Language::from_request(&query, req);
-    crate::i18n::html(crate::i18n::template("account", language), language)
+    crate::i18n::html(
+        demo_template(crate::i18n::template("account", language), state),
+        language,
+    )
 }
 pub async fn docs(
     Query(query): Query<crate::i18n::LanguageQuery>,

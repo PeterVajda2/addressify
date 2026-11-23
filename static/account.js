@@ -183,8 +183,98 @@
     }
   });
 
+  const addressHelper = element('registration-address-helper');
+  const addressCountry = element('registration-address-country');
+  const addressQuery = element('registration-address-query');
+  const addressResults = element('registration-address-results');
+  const addressStatus = element('registration-address-status');
+  const addressNote = element('registration-address-note');
+  const demo = window.AddresswiseRegistrationDemo;
+  let addressTimer, addressSearch;
+
+  function cancelAddressSearch() {
+    clearTimeout(addressTimer);
+    addressSearch?.abort();
+    addressSearch = undefined;
+    addressResults.replaceChildren();
+    addressStatus.textContent = '';
+  }
+
+  async function suggestAddress(query) {
+    const controller = new AbortController();
+    addressSearch = controller;
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const streetOnly = !/\d/.test(query);
+    const params = new URLSearchParams({q: query, country: addressCountry.value, limit: '4', api_key: demo.key});
+    addressStatus.textContent = translate('Finding addresses…');
+    try {
+      const response = await fetch('/search?' + params + (streetOnly ? '&street_only' : ''), {signal: controller.signal});
+      if (!response.ok) throw new Error('Address search failed');
+      const data = await response.json();
+      if (addressSearch !== controller) return;
+      for (const {address} of data.results) {
+        if (!address?.full_address || address.full_address.length > businessAddress.maxLength) continue;
+        const item = document.createElement('li');
+        const choice = document.createElement('button');
+        choice.type = 'button';
+        choice.textContent = address.full_address;
+        choice.addEventListener('click', () => {
+          cancelAddressSearch();
+          if (streetOnly && !address.premise && !address.subpremise) {
+            addressQuery.value = (address.thoroughfare || address.full_address) + ' ';
+            addressStatus.textContent = translate('Add the house number to see complete addresses.');
+            addressQuery.focus();
+            return;
+          }
+          lastRegistryAddress = '';
+          businessAddress.value = address.full_address;
+          addressQuery.value = '';
+          addressHelper.open = false;
+          addressNote.textContent = translate('Addresswise did the legwork. You can still edit the address.');
+          businessAddress.focus();
+        });
+        item.append(choice);
+        addressResults.append(item);
+      }
+      addressStatus.textContent = translate(addressResults.childElementCount
+        ? streetOnly ? 'Select a street, then add the house number.' : 'Select an address.'
+        : 'No addresses found. Try a street and city.');
+    } catch {
+      if (addressSearch === controller) {
+        addressStatus.textContent = translate('Address search is unavailable. You can enter the address manually.');
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  if (demo?.key && demo.countries.length) {
+    const regionNames = new Intl.DisplayNames([language], {type: 'region'});
+    const countries = demo.countries.map(code => [code, regionNames.of(code) || code]);
+    countries.sort((a, b) => a[1].localeCompare(b[1], language));
+    for (const [code, name] of countries) addressCountry.add(new Option(name, code));
+    if (demo.countries.includes(companyCountry.value)) addressCountry.value = companyCountry.value;
+    addressHelper.hidden = false;
+    const schedule = () => {
+      cancelAddressSearch();
+      const query = addressQuery.value.trim();
+      if (query.length >= 3) addressTimer = setTimeout(() => suggestAddress(query), 350);
+      else if (query) addressStatus.textContent = translate('Type at least 3 characters.');
+    };
+    addressQuery.addEventListener('input', schedule);
+    addressCountry.addEventListener('change', schedule);
+    addressQuery.addEventListener('keydown', event => {
+      if (event.key === 'Enter') event.preventDefault();
+    });
+    addressHelper.addEventListener('toggle', () => {
+      if (!addressHelper.open) cancelAddressSearch();
+    });
+    businessAddress.addEventListener('input', () => { addressNote.textContent = ''; });
+  }
+
   form('register-form', async data => {
     resetLookup();
+    cancelAddressSearch();
     await api('register', {...data, business: data.business === 'on', accept_terms: data.terms === 'on',
       terms_version: '2026-11-23-accounts', language});
     await load();
