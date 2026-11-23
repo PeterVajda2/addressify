@@ -79,8 +79,15 @@ def verify(base, compare=None):
         for path, body, headers in cases:
             check(request(base, path, headers=headers, body=body) == request(compare, path, headers=headers, body=body), 'Legacy address response differs')
             address_checks += 1
-    for path in ['/', '/addresswise', '/account', '/docs', '/admin', '/health']:
+    for path in ['/', '/addresswise', '/docs', '/admin', '/health']:
         check(request(base, path)[0] == 200, 'Platform page or health unavailable: ' + path)
+    status, signup = request(base, '/account?plan=starter&lang=cs')
+    check(status == 200 and 'id="account-entry">' in signup and 'id="register-form"' in signup,
+          'Registration form is hidden in the account document')
+    check('src="/assets/addresswise-account.js"' not in signup
+          and 'src="/assets/addresswise-i18n.js"' not in signup
+          and '__ACCOUNT_SCRIPT__' not in signup and '__ACCOUNT_I18N_SCRIPT__' not in signup,
+          'Registration scripts must ship with the account document')
     subject = '/companywise/api/v1/subjects/SK/35710799?minimal=true'
     check(request(base, subject)[0] == 401, 'Company lookup must require authentication')
     check(request(base, subject, headers={'Authorization': 'Bearer invalid'})[0] == 401, 'Invalid key was accepted')

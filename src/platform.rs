@@ -67,10 +67,11 @@ pub async fn account(
     req: &WebRequest<()>,
 ) -> WebResponse {
     let language = crate::i18n::Language::from_request(&query, req);
-    crate::i18n::html(
-        demo_template(crate::i18n::template("account", language), state),
-        language,
-    )
+    // Keep the account DOM and its scripts on the same release through CDN caches.
+    let page = demo_template(crate::i18n::template("account", language), state)
+        .replace("__ACCOUNT_I18N_SCRIPT__", include_str!("../static/i18n.js"))
+        .replace("__ACCOUNT_SCRIPT__", include_str!("../static/account.js"));
+    crate::i18n::html(page, language)
 }
 pub async fn docs(
     Query(query): Query<crate::i18n::LanguageQuery>,

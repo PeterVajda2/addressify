@@ -67,10 +67,10 @@
   }
 
   function form(id, handler) {
-    element(id).addEventListener('submit', async event => {
+    const form = element(id);
+    const button = form.querySelector('button[type=submit]');
+    form.addEventListener('submit', async event => {
       event.preventDefault();
-      const form = event.currentTarget;
-      const button = form.querySelector('button[type=submit]');
       button.disabled = true;
       status.textContent = '';
       try {
@@ -82,6 +82,7 @@
         button.disabled = false;
       }
     });
+    button.disabled = false;
   }
 
   function openAccount() {

@@ -51,7 +51,8 @@ for page in PAGES:
  else:source=source.replace('<main>','<main><div class="locale-toolbar">'+SELECTOR+'</div>',1)
  source=source.replace('</footer>',' <a class="terms-link" href="/terms">Terms of service</a></footer>',1)
  if '</footer>' not in source:source=source.replace('</main>','<p><a href="/terms">Terms of service</a></p></main>',1)
- source=source.replace('</head>',STYLES+'<script>window.AddresswiseMessages=__UI_MESSAGES__;</script><script src="/assets/addresswise-i18n.js"></script></head>',1)
+ language_script='<script>__ACCOUNT_I18N_SCRIPT__</script>' if page=='account' else '<script src="/assets/addresswise-i18n.js"></script>'
+ source=source.replace('</head>',STYLES+'<script>window.AddresswiseMessages=__UI_MESSAGES__;</script>'+language_script+'</head>',1)
  source=source.replace('new Intl.DisplayNames(["en"]','new Intl.DisplayNames([document.documentElement.lang]')
  source=source.replace('.toLocaleString()', '.toLocaleString(document.documentElement.lang)')
  # Localize explicit labels rendered next to source records before skipping that subtree.
