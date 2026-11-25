@@ -670,5 +670,6 @@
   "Demo requests": "Požiadavky v ukážke",
   "Demo credits": "Ukážkové kredity",
   "Four autocomplete requests during checkout use 4 credits. Selecting a displayed suggestion sends no request. Debounce browser input to reduce the number of requests.": "Štyri požiadavky našepkávača v pokladni stoja 4 kredity. Výber zobrazeného návrhu neodosiela žiadnu požiadavku. Po krátkej pauze pri písaní odošlete menej požiadaviek.",
-  "For an address supplied by an order API, send one validation request for 3 credits. A separate company and VAT lookup costs 5 credits.": "Adresu z objednávkového API overte jednou požiadavkou za 3 kredity. Samostatné vyhľadanie firmy a kontrola DPH stojí 5 kreditov."
+  "For an address supplied by an order API, send one validation request for 3 credits. A separate company and VAT lookup costs 5 credits.": "Adresu z objednávkového API overte jednou požiadavkou za 3 kredity. Samostatné vyhľadanie firmy a kontrola DPH stojí 5 kreditov.",
+  "Use a password of at least 12 characters.": "Použite heslo s dĺžkou aspoň 12 znakov."
 }

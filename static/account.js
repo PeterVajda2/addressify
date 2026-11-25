@@ -26,6 +26,17 @@
   let inspectionSequence = 0;
   inspectionMonth.value = new Date().toISOString().slice(0, 7);
 
+  for (const password of document.querySelectorAll('input[type="password"][minlength]')) {
+    password.addEventListener('invalid', () => {
+      if (password.validity.tooShort) {
+        password.setCustomValidity(translate('Use a password of at least 12 characters.'));
+      }
+    });
+    const clearValidation = () => password.setCustomValidity('');
+    password.addEventListener('input', clearValidation);
+    password.form.addEventListener('reset', clearValidation);
+  }
+
   async function api(path, body, authenticated = false) {
     const options = {cache: 'no-store'};
     if (body !== undefined) {
