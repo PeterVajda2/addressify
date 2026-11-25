@@ -3,12 +3,11 @@
   'use strict';
   const language=document.documentElement.lang;
   const words=window.AddresswiseMessages||{};
-  const formats={cs:{credits:'kreditů',month:'měsíc',entry:'kreditů na adresu',perMonth:'kreditů/měsíc',fits:'pokryje tento odhad.',reserved:'kreditů je rezervováno probíhajícími požadavky.',hard:'Pevný limit: požadavky nad limit se zablokují s HTTP 429 / credit_limit_exceeded. Obnova:',started:'Kreditové měření začalo',earlier:'Původní společné počty dotazů se zpětně nepřevádějí ani neúčtují.',established:'Vznik',confidence:'shoda',count:'Odpovědi v těchto ukázkách:',demo:'Veřejné ukázky nečerpají váš zákaznický limit.'},sk:{credits:'kreditov',month:'mesiac',entry:'kreditov na adresu',perMonth:'kreditov/mesiac',fits:'pokryje tento odhad.',reserved:'kreditov je rezervovaných prebiehajúcimi požiadavkami.',hard:'Pevný limit: požiadavky nad limit sa zablokujú s HTTP 429 / credit_limit_exceeded. Obnova:',started:'Kreditové meranie začalo',earlier:'Pôvodné spoločné počty dopytov sa spätne neprenášajú ani neúčtujú.',established:'Vznik',confidence:'zhoda',count:'Odpovede v týchto ukážkach:',demo:'Verejné ukážky nečerpajú váš zákaznícky limit.'}};
+  const formats={cs:{credits:'kreditů',month:'měsíc',perMonth:'kreditů/měsíc',fits:'pokryje tento odhad.',reserved:'kreditů je rezervováno probíhajícími požadavky.',hard:'Pevný limit: požadavky nad limit se zablokují s HTTP 429 / credit_limit_exceeded. Obnova:',started:'Kreditové měření začalo',earlier:'Původní společné počty dotazů se zpětně nepřevádějí ani neúčtují.',established:'Vznik',confidence:'shoda'},sk:{credits:'kreditov',month:'mesiac',perMonth:'kreditov/mesiac',fits:'pokryje tento odhad.',reserved:'kreditov je rezervovaných prebiehajúcimi požiadavkami.',hard:'Pevný limit: požiadavky nad limit sa zablokujú s HTTP 429 / credit_limit_exceeded. Obnova:',started:'Kreditové meranie začalo',earlier:'Pôvodné spoločné počty dopytov sa spätne neprenášajú ani neúčtujú.',established:'Vznik',confidence:'zhoda'}};
   function text(value) {
     if(language==='en')return value;
     if(words[value])return words[value];
     const f=formats[language];let m;
-    if((m=value.match(/^(.*?) credits per entry · (.*?) credits\/month\. (.*)$/s)))return `${m[1]} ${f.entry} · ${m[2]} ${f.perMonth}. ${text(m[3])}`;
     if((m=value.match(/^(.*?) \(€(.*?)\/month\) fits this estimate\. Your chosen package never upgrades automatically\.$/s)))return `${text(m[1])} (${m[2]} €/${f.month}) ${f.fits} ${text('Your chosen package never upgrades automatically.')}`;
     if((m=value.match(/^(.*?) credits are reserved by requests currently in progress\.$/)))return `${m[1]} ${f.reserved}`;
     if(value.startsWith('Hard limit: requests that would exceed this package'))return f.hard+' '+value.split('Reset: ')[1];
@@ -17,7 +16,6 @@
     if((m=value.match(/^Unlimited · No monthly credit limit · €(\d+)\/month$/)))return `Unlimited · ${text('No monthly credit limit')} · ${m[1]} €/${f.month}`;
     if((m=value.match(/^Established (.*)$/)))return f.established+' '+m[1];
     if((m=value.match(/^(✓ Validated|Needs review) · (.*?)% confidence$/)))return text(m[1])+` · ${m[2]}% ${f.confidence}`;
-    if((m=value.match(/^Responses received in these demos: (\d+) autocomplete × 1 \+ (\d+) validation × 3 \+ (\d+) company × 5 = (.*?) example credits\..*$/)))return `${f.count} ${m[1]} × 1 + ${m[2]} × 3 + ${m[3]} × 5 = ${m[4]} ${f.credits}. ${f.demo}`;
     if((m=value.match(/^\s*(.*?)% confidence\.(.*)$/)))return ` ${m[1]}% ${f.confidence}.${text(m[2])}`;
     if((m=value.match(/^(Search|Validation) failed with HTTP (\d+)$/)))return (language==='cs'?'Požadavek selhal s HTTP ':'Požiadavka zlyhala s HTTP ')+m[2];
     if((m=value.match(/^Request failed \((\d+)\)$/)))return (language==='cs'?'Požadavek selhal':'Požiadavka zlyhala')+` (${m[1]})`;
